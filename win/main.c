@@ -29,7 +29,7 @@ int main(int argc, const char *argv[]){
 	tDev siodev;
 	const char *rom;
 	tSize size;
-	uint t0, t1;
+	uint t0, dt;
 
 	if(argc != 3){
 		fprintf(stderr, "invalid parameters, example:\n\t%s COM1 your_file.gba\n", argv[0]);
@@ -57,8 +57,9 @@ int main(int argc, const char *argv[]){
 	t0 = get_rtime();
 	gba_multiboot(siodev, rom, size);
 
-	t1 = get_rtime();
-	fprintf(stderr, "transfer time: %.2f seconds\n", (t1 - t0) / 1000.0);
+	dt = get_rtime() - t0;
+	fprintf(stderr, "transfer time: %.2f seconds, average speed %.2f Kbps\n",
+		dt / 1000.0, size * 8 / dt * 1.0);
 
 	return 0;
 }
