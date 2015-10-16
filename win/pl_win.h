@@ -12,5 +12,6 @@ typedef unsigned char u8;
 
 tDev open_serial(const char* devname);
 boolean validate_serial(tDev d);
+void setup_serial(tDev d);
 void write_serial(tDev d, const void *data, tSize size);
 void read_serial(tDev d, void *data, tSize size);

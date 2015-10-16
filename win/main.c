@@ -40,22 +40,25 @@ int main(int argc, const char *argv[]){
 	siodev = open_serial(devname);
 	if(!validate_serial(siodev)){
 		fprintf(stderr, "can't open %s\n", devname);
-		return 0;
+		return -1;
 	}
+
+	// setup_serial(siodev);
 
 	rom = load_rom(filename, &size);
 	if(rom == NULL){
 		fprintf(stderr, "can't open %s\n", filename);
-		return 0;
+		return -2;
 	}
 
 	if(gba_ready(siodev)){
-		fprintf(stderr, "\ndidn't get GBA ready signal before timeout\n");
-		return 0;
+		return -3;
 	}
 
 	t0 = get_rtime();
-	gba_multiboot(siodev, rom, size);
+	if(gba_multiboot(siodev, rom, size)){
+		return -4;
+	}
 
 	dt = get_rtime() - t0;
 	fprintf(stderr, "transfer time: %.2f seconds, average speed %.2f Kbps\n",
