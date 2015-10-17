@@ -118,7 +118,7 @@ int main(void) {
 	uint8_t bufpos = 0, i, state = STATE_WAITING_CMD, cmd = 0;
 
 	while (1) {
-#if 1 // single bulk mode will cause this FSM to stuck on waiting data
+#if 1
 		switch(state){
 			case STATE_WAITING_CMD:
 				if(usb_serial_available() >= 1){
@@ -172,7 +172,7 @@ int main(void) {
 							// this bulk transfer mode doesn't work well
 							// wait_slave doesn't work as expected
 							// it only works if we add a manual delay here
-							// then the performance is the same or worse than none bulk transfer
+							// then the performance is the same or worse than none bulk xfer
 							for(i = 0; i < BUF_SIZE; ++i){
 								data = buffer[i];
 								xfer();
@@ -191,7 +191,7 @@ int main(void) {
 				state = STATE_WAITING_CMD;
 				break;
 		}
-#else // single bulk mode works in this simplified reader
+#else // large(> 32 bytes) bulk mode works in this simplified reader
 		if(usb_serial_available() >= 1){
 			cmd = usb_serial_getchar();
 			if (cmd == CMD_PING){

@@ -28,16 +28,6 @@ unsigned char *load_rom(const char *filename, tSize *psize){
 	return data;
 }
 
-u32 u32_swap_endianess(u32 a){
-	u32 b;
-	u8 *pa = (u8*)&a, *pb = (u8*)&b;
-	pa[0] = pb[3];
-	pa[1] = pb[2];
-	pa[2] = pb[1];
-	pa[3] = pb[0];
-	return b;
-}
-
 int multiboot(tDev d, const char *filename){
 	char *rom;
 	tSize size;
@@ -72,7 +62,7 @@ void reset_to_bootloader(tDev d){
 	return;
 }
 
-#define BULK_SIZE 32
+#define BULK_SIZE 0x20
 int serial_bench(tDev d, int mode, int length){
 	uint i, t0, dt;
 	u8 c[BULK_SIZE / 4 * 5], *p = 0;
@@ -80,9 +70,14 @@ int serial_bench(tDev d, int mode, int length){
 
 	length = align(length, BULK_SIZE);
 
+	// reset the counter
+	c[0] = CMD_COUNTER;
+	write_serial(d, c, 1);
+
 	fprintf(stderr, "starting %d bytes serial speed test\n", length);
 	t0 = get_rtime();
 	if(mode == 0){
+		// 4 bytes per write, the slowest
 		mode_str = "32 bit";
 		c[0] = CMD_FLAG_W;
 		c[1] = 0; c[2] = 0; c[3] = 0; c[4] = 0;
@@ -90,6 +85,8 @@ int serial_bench(tDev d, int mode, int length){
 			write_serial(d, c, 5);
 		}
 	}else if(mode == 1){
+		// transfer the entire file with a single write, massive performance improve
+		// and if the file goes to big, WriteFile will fail(immediatly after call)
 		mode_str = "single bulk";
 		p = malloc(length / 4 * 5);
 		memset(p, 0, length / 4 * 5);
@@ -98,7 +95,9 @@ int serial_bench(tDev d, int mode, int length){
 		}
 		write_serial(d, p, length / 4 * 5);
 	}else if(mode == 2){
-		mode_str = "bulk";
+		// BULK_SIZE per write, performance close to mode 1 in this test
+		// but only improve real world multiboot performance a tiny bit
+		mode_str = "32 bytes bulks";
 		memset(c, 0, BULK_SIZE / 4 * 5);
 		for(i = 0; i < BULK_SIZE / 4; ++i){
 			c[i * 5] = CMD_FLAG_W;
@@ -116,7 +115,7 @@ int serial_bench(tDev d, int mode, int length){
 		free(p);
 	}
 
-	c[0] = CMD_COUNTER;
+	c[0] = CMD_COUNTER | CMD_FLAG_R;
 	write_serial(d, c, 1);
 	read_serial(d, c, 4);
 	fprintf(stderr, "counter = %d\n", *(u32*)c);
