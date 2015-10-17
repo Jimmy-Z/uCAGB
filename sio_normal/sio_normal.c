@@ -62,11 +62,8 @@ inline static void jump_bl(void){
 #define CLK_BIT 1
 
 inline static uint32_t xfer(uint32_t data) {
-	unsigned int i;
-	LED_ON();
-	cli();
-
-	// manipulating 32bit value could be slow, maybe I shoud expand this to using 8 bit values
+	uint8_t i;
+	// manipulating 32bit value could be slow, maybe I shoud expand this to 8 bit
 
 	for (i = 0; i < 32; ++i){
 		// clear SC and SO
@@ -81,14 +78,14 @@ inline static uint32_t xfer(uint32_t data) {
 		data |= (GBA_IN>>MISO_BIT)&1;
 	}
 
-	sei();
-	LED_OFF();
 	return data;
 }
 
 #define STATE_WAITING_CMD	0
 #define STATE_WAITING_DATA	1
 #define STATE_CMD_READY		2
+
+#define BUF_SIZE 8
 
 int main(void) {
 	clock_prescale_set(clock_div_1);
@@ -106,8 +103,8 @@ int main(void) {
 	while (!usb_configured());
 	_delay_ms(1000);
 
-	unsigned int state = STATE_WAITING_CMD, cmd = 0;
-	uint32_t data = 0, counter = 0;
+	uint32_t buffer[BUF_SIZE], data = 0, counter = 0;
+	unsigned bufpos = 0, i, state = STATE_WAITING_CMD, cmd = 0;
 
 	while (1) {
 #if 1 // single bulk mode will cause this FSM to stuck on waiting data
@@ -136,18 +133,38 @@ int main(void) {
 				break;
 			case STATE_CMD_READY:
 				if(cmd & CMD_FLAG_X){
+					cli();
 					data = xfer(data);
+					sei();
 				}
-				if(cmd == CMD_PING){
-					LED_ON();
-					_delay_ms(10);
-					LED_OFF();
-					data = ~data;
-				}else if(cmd == CMD_BOOTLOADER){
-					jump_bl();
-				}else if(cmd == CMD_COUNTER){
-					data = counter;
-					counter = 0;
+				switch(cmd){
+					case CMD_PING:
+						LED_ON();
+						_delay_ms(10);
+						LED_OFF();
+						data = ~data;
+						break;
+					case CMD_BOOTLOADER:
+						jump_bl();
+						break;
+					case CMD_COUNTER:
+						data = counter;
+						counter = 0;
+						break;
+					case CMD_BULK:
+						buffer[bufpos] = data;
+						++bufpos;
+						LED_ON();
+						if(bufpos == BUF_SIZE){
+							cli();
+							for(i = 0; i < BUF_SIZE; ++i){
+								xfer(buffer[i]);
+							}
+							sei();
+							bufpos = 0;
+							LED_OFF();
+						}
+						break;
 				}
 				if(cmd & CMD_FLAG_R){
 					usb_serial_write((uint8_t*)&data, 4);

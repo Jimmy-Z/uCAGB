@@ -137,7 +137,7 @@ static int gba_send_main(tDev d, u8 *rom, tSize size){
 	ret = xfer16(d, 0x0065);
 	fprintf(stderr, "\rmain block complete: received 0x%04x\n", ret);
 
-	timeout = 0x10;
+	timeout = 0x100;
 	do{
 		ret = xfer16(d, 0x0065);
 		fprintf(stderr, "\rchecksum wait: received 0x%04x", ret);
