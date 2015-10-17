@@ -61,10 +61,21 @@ inline static void jump_bl(void){
 #define MISO_BIT 3
 #define CLK_BIT 1
 
-inline static uint32_t xfer(uint32_t data) {
-	uint8_t i;
-	// manipulating 32bit value could be slow, maybe I shoud expand this to 8 bit
+static uint32_t data;
+static uint8_t wait_slave = 0;
 
+inline static void xfer(void) {
+	uint8_t i;
+	// manipulating 32bit value in AVR could be slow
+	// maybe I should expand this to 8 bit
+
+	// gbatek says we should wait for SI(slave SO) = LOW
+	// but seems like in multiboot mode the slave doesn't do this?
+	if(wait_slave){
+		while(GBA_IN & (1 << MISO_BIT)){
+			asm("nop");
+		}
+	}
 	for (i = 0; i < 32; ++i){
 		// clear SC and SO
 		GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
@@ -78,7 +89,7 @@ inline static uint32_t xfer(uint32_t data) {
 		data |= (GBA_IN>>MISO_BIT)&1;
 	}
 
-	return data;
+	return;
 }
 
 #define STATE_WAITING_CMD	0
@@ -103,8 +114,8 @@ int main(void) {
 	while (!usb_configured());
 	_delay_ms(1000);
 
-	uint32_t buffer[BUF_SIZE], data = 0, counter = 0;
-	unsigned bufpos = 0, i, state = STATE_WAITING_CMD, cmd = 0;
+	uint32_t buffer[BUF_SIZE], counter = 0;
+	uint8_t bufpos = 0, i, state = STATE_WAITING_CMD, cmd = 0;
 
 	while (1) {
 #if 1 // single bulk mode will cause this FSM to stuck on waiting data
@@ -134,7 +145,7 @@ int main(void) {
 			case STATE_CMD_READY:
 				if(cmd & CMD_FLAG_X){
 					cli();
-					data = xfer(data);
+					xfer();
 					sei();
 				}
 				switch(cmd){
@@ -157,9 +168,16 @@ int main(void) {
 						LED_ON();
 						if(bufpos == BUF_SIZE){
 							cli();
+							wait_slave = 1;
+							// this bulk transfer mode doesn't work well
+							// wait_slave doesn't work as expected
+							// it only works if we add a manual delay here
+							// then the performance is the same or worse than none bulk transfer
 							for(i = 0; i < BUF_SIZE; ++i){
-								xfer(buffer[i]);
+								data = buffer[i];
+								xfer();
 							}
+							wait_slave = 0;
 							sei();
 							bufpos = 0;
 							LED_OFF();

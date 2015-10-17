@@ -22,16 +22,17 @@ void xfer32wo(tDev d, u32 data){
 	return;
 }
 
-#define BULK_SIZE 32
+#define BULK_SIZE 0x20
 void xfer32bulk(tDev d, u8* data, tSize size){
 	u8 c[BULK_SIZE / 4 * 5];
 	uint i, j;
 	for(i = 0; i < BULK_SIZE / 4; ++i){
 		c[i * 5] = CMD_FLAG_W | CMD_FLAG_X;
+		// c[i * 5] = CMD_BULK;
 	}
 	for(i = 0; i < size / BULK_SIZE; ++i){
 		for(j = 0; j < BULK_SIZE / 4; ++j){
-			*(u32*)&c[j * 5 + 1] = *(u32*)&data[i * BULK_SIZE + j * 4];
+			*(u32*)(c + j * 5 + 1) = *(u32*)(data + i * BULK_SIZE + j * 4);
 		}
 		write_serial(d, c, BULK_SIZE / 4 * 5);
 	}
@@ -72,7 +73,8 @@ int gba_ready(tDev d){
 
 static int gba_send_header(tDev d, const u8 *header){
 	uint i, ret;
-	xfer16(d, 0x6100);
+	xfer16wo(d, 0x6100);
+	fprintf(stderr, "sending header...\n");
 	for (i = 0; i < 0x60; ++i){
 		xfer16wo(d, ((u16 *)header)[i]);
 		// fprintf(stderr, "\rheader (%d%%): received 0x%04x", (i * 100) / 0x60, ret);
@@ -126,18 +128,29 @@ static int gba_send_main(tDev d, u8 *rom, tSize size){
 
 	gba_exchange_keys(d, size, &crc, &enc);
 
-	// encrypt ROM
+#define USE_BULK 1
+#if USE_BULK
+	fprintf(stderr, "encrypting main block...\n");
+#else
+	fprintf(stderr, "encrypting and sending main block...\n");
+#endif
 	for(offset = 0xc0, p = (u32*)&rom[offset]; offset < size; offset += 4, ++p){
 		gbaCrcAdd(*p, &crc);
 		*p = gbaEncrypt(*p, offset, &enc);
-		// xfer32wo(d, *p);
+#if USE_BULK
 	}
+	fprintf(stderr, "sending main block...\n");
 	xfer32bulk(d, rom + 0xc0, size - 0xc0);
+#else
+		xfer32wo(d, *p);
+	}
+#endif
+
 
 	ret = xfer16(d, 0x0065);
 	fprintf(stderr, "\rmain block complete: received 0x%04x\n", ret);
 
-	timeout = 0x100;
+	timeout = 0x20;
 	do{
 		ret = xfer16(d, 0x0065);
 		fprintf(stderr, "\rchecksum wait: received 0x%04x", ret);
