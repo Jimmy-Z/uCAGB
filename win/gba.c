@@ -5,10 +5,10 @@
 #include "gba.h"
 #include "gbaencryption.h"
 
-static uint xfer32(tDev d, uint data){
+uint xfer32(tDev d, uint data){
 	u8 *p = (u8 *)&data;
 	u8 c[5];
-	c[0] = CMD_XFER_RW;
+	c[0] = CMD_FLAG_W | CMD_FLAG_X | CMD_FLAG_R;
 	c[1] = p[3]; c[2] = p[2]; c[3] = p[1]; c[4] = p[0];
 	write_serial(d, c, 5);
 	read_serial(d, c, 4);
@@ -16,13 +16,23 @@ static uint xfer32(tDev d, uint data){
 	return data;
 }
 
-static void xfer32wo(tDev d, uint data){
+void xfer32wo(tDev d, uint data){
 	u8 *p = (u8 *)&data;
 	u8 c[5];
-	c[0] = CMD_XFER_W;
+	c[0] = CMD_FLAG_W | CMD_FLAG_X;
 	c[1] = p[3]; c[2] = p[2]; c[3] = p[1]; c[4] = p[0];
 	write_serial(d, c, 5);
 	return;
+}
+
+uint xfer32ro(tDev d, uint data){
+	u8 *p = (u8 *)&data;
+	u8 c[4];
+	c[0] = CMD_FLAG_X | CMD_FLAG_R;
+	write_serial(d, c, 1);
+	read_serial(d, c, 4);
+	p[0] = c[3]; p[1] = c[2]; p[2] = c[1]; p[3] = c[0];
+	return data;
 }
 
 static uint xfer16(tDev d, uint data){

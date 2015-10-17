@@ -5,7 +5,7 @@ tDev open_serial(const char* devname){
 }
 
 boolean validate_serial(tDev d){
-	return d != INVALID_HANDLE_VALUE;
+	return d == INVALID_HANDLE_VALUE;
 }
 
 void setup_serial(tDev d){
