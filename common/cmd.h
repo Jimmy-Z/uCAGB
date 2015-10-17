@@ -3,3 +3,5 @@
 #define CMD_FLAG_X		4	// do transfer with GBA
 #define CMD_PING		((1 << 3)|CMD_FLAG_W|CMD_FLAG_R)
 #define CMD_BOOTLOADER		(2 << 3)
+#define CMD_COUNTER		((3 << 3)|CMD_FLAG_R)
+

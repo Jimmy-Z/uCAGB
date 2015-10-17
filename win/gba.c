@@ -5,34 +5,45 @@
 #include "gba.h"
 #include "gbaencryption.h"
 
-uint xfer32(tDev d, uint data){
-	u8 *p = (u8 *)&data;
+u32 xfer32(tDev d, u32 data){
 	u8 c[5];
 	c[0] = CMD_FLAG_W | CMD_FLAG_X | CMD_FLAG_R;
-	c[1] = p[3]; c[2] = p[2]; c[3] = p[1]; c[4] = p[0];
+	*(u32*)&c[1] = data;
 	write_serial(d, c, 5);
 	read_serial(d, c, 4);
-	p[0] = c[3]; p[1] = c[2]; p[2] = c[1]; p[3] = c[0];
-	return data;
+	return *(u32*)c;
 }
 
-void xfer32wo(tDev d, uint data){
-	u8 *p = (u8 *)&data;
+void xfer32wo(tDev d, u32 data){
 	u8 c[5];
 	c[0] = CMD_FLAG_W | CMD_FLAG_X;
-	c[1] = p[3]; c[2] = p[2]; c[3] = p[1]; c[4] = p[0];
+	*(u32*)&c[1] = data;
 	write_serial(d, c, 5);
 	return;
 }
 
-uint xfer32ro(tDev d, uint data){
-	u8 *p = (u8 *)&data;
+#define BULK_SIZE 32
+void xfer32bulk(tDev d, u8* data, tSize size){
+	u8 c[BULK_SIZE / 4 * 5];
+	uint i, j;
+	for(i = 0; i < BULK_SIZE / 4; ++i){
+		c[i * 5] = CMD_FLAG_W | CMD_FLAG_X;
+	}
+	for(i = 0; i < size / BULK_SIZE; ++i){
+		for(j = 0; j < BULK_SIZE / 4; ++j){
+			*(u32*)&c[j * 5 + 1] = *(u32*)&data[i * BULK_SIZE + j * 4];
+		}
+		write_serial(d, c, BULK_SIZE / 4 * 5);
+	}
+	return;
+}
+
+u32 xfer32ro(tDev d){
 	u8 c[4];
 	c[0] = CMD_FLAG_X | CMD_FLAG_R;
 	write_serial(d, c, 1);
 	read_serial(d, c, 4);
-	p[0] = c[3]; p[1] = c[2]; p[2] = c[1]; p[3] = c[0];
-	return data;
+	return *(u32*)c;
 }
 
 static uint xfer16(tDev d, uint data){
@@ -104,8 +115,9 @@ static void gba_exchange_keys(tDev d, uint size, struct gbaCrcState *pcrc, struc
 	gbaEncryptionInit(seed, penc);
 }
 
-static int gba_send_main(tDev d, const u8 *rom, tSize size){
+static int gba_send_main(tDev d, u8 *rom, tSize size){
 	uint ret, offset, timeout;
+	u32 *p;
 	struct gbaCrcState crc;
 	struct gbaEncryptionState enc;
 
@@ -114,25 +126,13 @@ static int gba_send_main(tDev d, const u8 *rom, tSize size){
 
 	gba_exchange_keys(d, size, &crc, &enc);
 
-	for(offset = 0xc0; offset < size; offset += 4){
-		u32 data = ((u32 *)rom)[offset >> 2];
-
-		gbaCrcAdd(data, &crc);
-		data = gbaEncrypt(data, offset, &enc);
-
-#if 0 // huge speed gain if we just do not get any return from the serial
-		ret = xfer32(d, data);
-		// percentage indicator code is commented out purposely, windows console performance sucks
-		// fprintf(stderr, "\rmain block (%d%%): receive 0x%08x", (offset * 100) / size, ret);
-		if((ret >> 16) != (offset & 0xffff)){
-			fprintf(stderr, "\ntransmission error\n");
-			return -1;
-		}
-#else
-		xfer32wo(d, data);
-		// fprintf(stderr, "\rmain block (%d%%)", (offset * 100) / size);
-#endif
+	// encrypt ROM
+	for(offset = 0xc0, p = (u32*)&rom[offset]; offset < size; offset += 4, ++p){
+		gbaCrcAdd(*p, &crc);
+		*p = gbaEncrypt(*p, offset, &enc);
+		// xfer32wo(d, *p);
 	}
+	xfer32bulk(d, rom + 0xc0, size - 0xc0);
 
 	ret = xfer16(d, 0x0065);
 	fprintf(stderr, "\rmain block complete: received 0x%04x\n", ret);
@@ -159,7 +159,7 @@ static int gba_send_main(tDev d, const u8 *rom, tSize size){
 	return 0;
 }
 
-int gba_multiboot(tDev d, const u8 *rom, tSize size){
+int gba_multiboot(tDev d, u8 *rom, tSize size){
 	gba_send_header(d, rom);
 	return gba_send_main(d, rom, size);
 }

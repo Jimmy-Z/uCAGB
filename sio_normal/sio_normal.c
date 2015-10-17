@@ -25,7 +25,7 @@ along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "../common/cmd.h"
 
-inline static void jump_bl(){
+inline static void jump_bl(void){
 	// https://www.pjrc.com/teensy/jump_to_bootloader.html
 	cli();
 	UDCON = 1;
@@ -107,16 +107,17 @@ int main(void) {
 	_delay_ms(1000);
 
 	unsigned int state = STATE_WAITING_CMD, cmd = 0;
-	uint32_t data = 0;
-	uint8_t *p8 = (uint8_t*)&data;
+	uint32_t data = 0, counter = 0;
 
 	while (1) {
+#if 1 // single bulk mode will cause this FSM to stuck on waiting data
 		switch(state){
 			case STATE_WAITING_CMD:
 				if(usb_serial_available() >= 1){
 					cmd = usb_serial_getchar();
 					if(cmd & CMD_FLAG_W){
 						state = STATE_WAITING_DATA;
+						LED_ON();
 					}else{
 						state = STATE_CMD_READY;
 					}
@@ -124,12 +125,13 @@ int main(void) {
 				break;
 			case STATE_WAITING_DATA:
 				if(usb_serial_available() >= 4){
-					data = 0;
-					p8[3] = usb_serial_getchar();
-					p8[2] = usb_serial_getchar();
-					p8[1] = usb_serial_getchar();
-					p8[0] = usb_serial_getchar();
+					((uint8_t*)&data)[0] = usb_serial_getchar();
+					((uint8_t*)&data)[1] = usb_serial_getchar();
+					((uint8_t*)&data)[2] = usb_serial_getchar();
+					((uint8_t*)&data)[3] = usb_serial_getchar();
+					counter += 4;
 					state = STATE_CMD_READY;
+					LED_OFF();
 				}
 				break;
 			case STATE_CMD_READY:
@@ -143,18 +145,39 @@ int main(void) {
 					data = ~data;
 				}else if(cmd == CMD_BOOTLOADER){
 					jump_bl();
+				}else if(cmd == CMD_COUNTER){
+					data = counter;
+					counter = 0;
 				}
 				if(cmd & CMD_FLAG_R){
-					usb_serial_putchar(p8[3]);
-					usb_serial_putchar(p8[2]);
-					usb_serial_putchar(p8[1]);
-					usb_serial_putchar(p8[0]);
+					usb_serial_write((uint8_t*)&data, 4);
 					usb_serial_flush_output();
 				}
 				state = STATE_WAITING_CMD;
 				break;
 		}
+#else // single bulk mode works in this simplified reader
+		if(usb_serial_available() >= 1){
+			cmd = usb_serial_getchar();
+			if (cmd == CMD_PING){
+				data = 0x00ff55aa;
+				usb_serial_write((uint8_t*)&data, 4);
+				usb_serial_flush_output();
+			}else if (cmd == CMD_FLAG_W){
+				LED_ON();
+			}else if (cmd == CMD_COUNTER){
+				data = counter;
+				counter = 0;
+				usb_serial_write((uint8_t*)&data, 4);
+				usb_serial_flush_output();
+				LED_OFF();
+			}else{
+				++ counter;
+			}
+		}
+#endif
 	}
+	// LED_ON();
 	return 0;
 }
 
