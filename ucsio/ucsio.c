@@ -23,7 +23,7 @@ along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "usb_serial.h"
 
-#include "../common/cmd.h"
+#include "../common/common.h"
 
 inline static void jump_bl(void){
 	// https://www.pjrc.com/teensy/jump_to_bootloader.html

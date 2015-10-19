@@ -41,7 +41,7 @@
 
 
 # Target file name (without extension).
-TARGET = sio_normal
+TARGET = ucsio
 
 
 # List C source files here. (C dependencies are automatically generated.)

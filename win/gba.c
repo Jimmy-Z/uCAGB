@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 #include "pl_win.h"
-#include "../common/cmd.h"
+#include "../common/common.h"
 #include "gba.h"
 #include "gbaencryption.h"
 

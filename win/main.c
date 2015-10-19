@@ -2,7 +2,7 @@
 #include <stdlib.h>
 
 #include "pl_win.h"
-#include "../common/cmd.h"
+#include "../common/common.h"
 #include "gba.h"
 
 uint align(uint a, uint b){
