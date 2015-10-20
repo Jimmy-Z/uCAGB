@@ -25,7 +25,7 @@ along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "../common/common.h"
 
-inline static void jump_bl(void){
+inline static void jmp_bl(void){
 	// https://www.pjrc.com/teensy/jump_to_bootloader.html
 	cli();
 	UDCON = 1;
@@ -61,10 +61,10 @@ inline static void jump_bl(void){
 #define MISO_BIT 3
 #define CLK_BIT 1
 
-static uint32_t data;
-static uint8_t wait_slave = 0;
+static uint32_t data, buffer[BULK_SIZE], c_r, c_w, c_x;
+static uint8_t bufpos, wait_slave;
 
-inline static void xfer(void) {
+inline static void xfer_base(void) {
 	uint8_t i;
 	// manipulating 32bit value in AVR could be slow
 	// maybe I should expand this to 8 bit
@@ -88,15 +88,70 @@ inline static void xfer(void) {
 		// read SI
 		data |= (GBA_IN>>MISO_BIT)&1;
 	}
-
-	return;
 }
 
-#define STATE_WAITING_CMD	0
-#define STATE_WAITING_DATA	1
-#define STATE_CMD_READY		2
+inline static void xfer(void){
+	cli();
+	xfer_base();
+	sei();
+	c_x += 4;
+}
 
-#define BUF_SIZE 8
+inline static void xfer_bulk_ro(void){
+	uint8_t i;
+	cli();
+	for(i = 0; i < BULK_SIZE; ++i){
+		xfer_base();
+		buffer[i] = data;
+	}
+	sei();
+	c_x += (BULK_SIZE << 2);
+}
+
+inline static void xfer_bulk_wo(void){
+	uint8_t i;
+	cli();
+	for(i = 0; i < BULK_SIZE; ++i){
+		data = buffer[i];
+		xfer_base();
+	}
+	sei();
+	c_x += (BULK_SIZE << 2);
+}
+
+inline static void read_data(void){
+	while(usb_serial_available() < 4){
+		asm("nop");
+	};
+	((uint8_t*)&data)[0] = usb_serial_getchar();
+	((uint8_t*)&data)[1] = usb_serial_getchar();
+	((uint8_t*)&data)[2] = usb_serial_getchar();
+	((uint8_t*)&data)[3] = usb_serial_getchar();
+	c_r += 4;
+}
+
+inline static void read_data_bulk(void){
+	uint8_t i;
+	while(usb_serial_available() < (BULK_SIZE << 2)){
+		asm("nop");
+	};
+	for(i = 0; i < (BULK_SIZE << 2); ++i){
+		((uint8_t*)buffer)[i] = usb_serial_getchar();
+	}
+	c_r += (BULK_SIZE << 2);
+}
+
+inline static void write_data(void){
+	usb_serial_write((uint8_t*)&data, 4);
+	usb_serial_flush_output();
+	c_w += 4;
+}
+
+inline static void write_data_bulk(void){
+	usb_serial_write((uint8_t*)buffer, (BULK_SIZE << 2));
+	usb_serial_flush_output();
+	c_w += (BULK_SIZE << 2);
+}
 
 int main(void) {
 	clock_prescale_set(clock_div_1);
@@ -111,108 +166,70 @@ int main(void) {
 	GBA_OUT |= (1 << CLK_BIT);
 
 	usb_init();
-	while (!usb_configured());
+	while(!usb_configured()){
+		asm("nop");
+	}
 	_delay_ms(1000);
 
-	uint32_t buffer[BUF_SIZE], counter = 0;
-	uint8_t bufpos = 0, i, state = STATE_WAITING_CMD, cmd = 0;
+	bufpos = 0;
+	wait_slave = 0;
+	c_r = 0; c_w = 0; c_x = 0;
 
-	while (1) {
-#if 1
-		switch(state){
-			case STATE_WAITING_CMD:
-				if(usb_serial_available() >= 1){
-					cmd = usb_serial_getchar();
-					if(cmd & CMD_FLAG_W){
-						state = STATE_WAITING_DATA;
-						LED_ON();
-					}else{
-						state = STATE_CMD_READY;
-					}
-				}
-				break;
-			case STATE_WAITING_DATA:
-				if(usb_serial_available() >= 4){
-					((uint8_t*)&data)[0] = usb_serial_getchar();
-					((uint8_t*)&data)[1] = usb_serial_getchar();
-					((uint8_t*)&data)[2] = usb_serial_getchar();
-					((uint8_t*)&data)[3] = usb_serial_getchar();
-					counter += 4;
-					state = STATE_CMD_READY;
-					LED_OFF();
-				}
-				break;
-			case STATE_CMD_READY:
-				if(cmd & CMD_FLAG_X){
-					cli();
-					xfer();
-					sei();
-				}
-				switch(cmd){
-					case CMD_PING:
-						LED_ON();
-						_delay_ms(10);
-						LED_OFF();
-						data = ~data;
-						break;
-					case CMD_BOOTLOADER:
-						jump_bl();
-						break;
-					case CMD_COUNTER:
-						data = counter;
-						counter = 0;
-						break;
-					case CMD_BULK:
-						buffer[bufpos] = data;
-						++bufpos;
-						LED_ON();
-						if(bufpos == BUF_SIZE){
-							cli();
-							wait_slave = 1;
-							// this bulk transfer mode doesn't work well
-							// wait_slave doesn't work as expected
-							// it only works if we add a manual delay here
-							// then the performance is the same or worse than none bulk xfer
-							for(i = 0; i < BUF_SIZE; ++i){
-								data = buffer[i];
-								xfer();
-							}
-							wait_slave = 0;
-							sei();
-							bufpos = 0;
-							LED_OFF();
-						}
-						break;
-				}
-				if(cmd & CMD_FLAG_R){
-					usb_serial_write((uint8_t*)&data, 4);
-					usb_serial_flush_output();
-				}
-				state = STATE_WAITING_CMD;
-				break;
+	while(1){
+		while(usb_serial_available() < 1){
+			asm("nop");
 		}
-#else // large(> 32 bytes) bulk mode works in this simplified reader
-		if(usb_serial_available() >= 1){
-			cmd = usb_serial_getchar();
-			if (cmd == CMD_PING){
-				data = 0x00ff55aa;
-				usb_serial_write((uint8_t*)&data, 4);
-				usb_serial_flush_output();
-			}else if (cmd == CMD_FLAG_W){
-				LED_ON();
-			}else if (cmd == CMD_COUNTER){
-				data = counter;
-				counter = 0;
-				usb_serial_write((uint8_t*)&data, 4);
-				usb_serial_flush_output();
-				LED_OFF();
+		uint8_t cmd = usb_serial_getchar();
+		uint8_t bulk = cmd & CMD_FLAG_B;
+		if(cmd & CMD_FLAG_W){
+			if(bulk){
+				read_data_bulk();
 			}else{
-				++ counter;
+				read_data();
 			}
 		}
-#endif
+		switch(cmd & CMD_MASK){
+			case CMD_XFER:
+				if(bulk){
+					if(cmd & CMD_FLAG_W){
+						xfer_bulk_wo();
+					}else{
+						xfer_bulk_ro();
+					}
+				}else{
+					xfer();
+				}
+				break;
+			case CMD_PING:
+				data = ~data;
+				LED_ON();
+				_delay_ms(10);
+				LED_OFF();
+				break;
+			case CMD_BOOTLOADER:
+				jmp_bl();
+				break;
+			case CMD_COUNTER:
+				buffer[0] = c_r;
+				buffer[1] = c_w;
+				buffer[2] = c_x;
+				c_r = 0; c_w = 0; c_x = 0;
+				break;
+			case CMD_SET_WS:
+				wait_slave = 1;
+				break;
+			case CMD_UNSET_WS:
+				wait_slave = 0;
+				break;
+		}
+		if(cmd & CMD_FLAG_R){
+			if(bulk){
+				write_data_bulk();
+			}else{
+				write_data();
+			}
+		}
 	}
-	// LED_ON();
 	return 0;
 }
 

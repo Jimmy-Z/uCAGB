@@ -7,7 +7,7 @@
 
 u32 xfer32(tDev d, u32 data){
 	u8 c[5];
-	c[0] = CMD_FLAG_W | CMD_FLAG_X | CMD_FLAG_R;
+	c[0] = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
 	*(u32*)&c[1] = data;
 	write_serial(d, c, 5);
 	read_serial(d, c, 4);
@@ -16,35 +16,32 @@ u32 xfer32(tDev d, u32 data){
 
 void xfer32wo(tDev d, u32 data){
 	u8 c[5];
-	c[0] = CMD_FLAG_W | CMD_FLAG_X;
+	c[0] = CMD_XFER | CMD_FLAG_W;
 	*(u32*)&c[1] = data;
 	write_serial(d, c, 5);
-	return;
 }
 
-#define BULK_SIZE 0x20
-void xfer32bulk(tDev d, u8* data, tSize size){
-	u8 c[BULK_SIZE / 4 * 5];
+// semi bulk mode, PC -> uC use bulk write, but that's just an array of CMD_WX
+void xfer32sb(tDev d, u8* data, tSize size){
+	u8 c[BULK_SIZE * 5];
 	uint i, j;
-	for(i = 0; i < BULK_SIZE / 4; ++i){
-		c[i * 5] = CMD_FLAG_W | CMD_FLAG_X;
-		// c[i * 5] = CMD_BULK;
+	for(i = 0; i < BULK_SIZE; ++i){
+		c[i * 5] = CMD_XFER | CMD_FLAG_W;
 	}
-	for(i = 0; i < size / BULK_SIZE; ++i){
-		for(j = 0; j < BULK_SIZE / 4; ++j){
-			*(u32*)(c + j * 5 + 1) = *(u32*)(data + i * BULK_SIZE + j * 4);
+	for(i = 0; i < size / (BULK_SIZE << 2); ++i){
+		for(j = 0; j < BULK_SIZE; ++j){
+			*(u32*)(c + j * 5 + 1) = *(u32*)(data + (i * BULK_SIZE + j) * 4);
 		}
-		write_serial(d, c, BULK_SIZE / 4 * 5);
+		write_serial(d, c, BULK_SIZE * 5);
 	}
-	return;
 }
 
-u32 xfer32ro(tDev d){
-	u8 c[4];
-	c[0] = CMD_FLAG_X | CMD_FLAG_R;
-	write_serial(d, c, 1);
-	read_serial(d, c, 4);
-	return *(u32*)c;
+// PC -> uC use bulk write in a single CMD_BWX command
+// so uC -> GBA will use bulk xfer too
+void xfer32b(tDev d, u8* data, tSize size){
+	u8 c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_B;
+	write_serial(d, &c, 1);
+	write_serial(d, data, size);
 }
 
 static uint xfer16(tDev d, uint data){
@@ -140,7 +137,7 @@ static int gba_send_main(tDev d, u8 *rom, tSize size){
 #if USE_BULK
 	}
 	fprintf(stderr, "sending main block...\n");
-	xfer32bulk(d, rom + 0xc0, size - 0xc0);
+	xfer32sb(d, rom + 0xc0, size - 0xc0);
 #else
 		xfer32wo(d, *p);
 	}
