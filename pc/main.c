@@ -131,6 +131,33 @@ int serial_bench(tDev d, int mode, int length){
 	return 0;
 }
 
+int x(tDev d, int mode, u32 v){
+	int i;
+	u32 r;
+	u8 c;
+	switch(mode){
+		case 1:
+			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
+			write_serial(d, &c, 1);
+			write_serial(d, &v, 4);
+			read_serial(d, &r, 4);
+			fprintf(stderr, "%08x <-> %08x\n", v, r);
+			break;
+		case 2:
+			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R | CMD_FLAG_B;
+			write_serial(d, &c, 1);
+			for(i = 0; i < BULK_SIZE; ++i){
+				write_serial(d, &v, 4);
+			}
+			for(i = 0; i < BULK_SIZE; ++i){
+				read_serial(d, &r, 4);
+				fprintf(stderr, "%08x <-> %08x\n", v, r);
+			}
+			break;
+	}
+	return 0;
+}
+
 #define PING_PATTERN 0xff00aa55
 int validate_uC(tDev d){
 	u8 c[5];
@@ -168,6 +195,8 @@ int main(int argc, const char *argv[]){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){
 		return serial_bench(d, atoi(argv[3]), atoi(argv[4]));
+	}else if(argc == 5 && !strcmp(argv[2], "x")){
+		return x(d, atoi(argv[3]), strtoul(argv[4], NULL, 0x10));
 	}else{
 		fprintf(stderr, "invalid parameters, example:\n\t%s COM1 multiboot your_file.gba\n", argv[0]);
 		return -1;

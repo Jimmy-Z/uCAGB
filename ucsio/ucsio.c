@@ -119,6 +119,18 @@ inline static void xfer_bulk_wo(void){
 	c_x += (BULK_SIZE << 2);
 }
 
+inline static void xfer_bulk(void){
+	uint8_t i;
+	cli();
+	for(i = 0; i < BULK_SIZE; ++i){
+		data = buffer[i];
+		xfer_base();
+		buffer[i] = data;
+	}
+	sei();
+	c_x += (BULK_SIZE << 2);
+}
+
 inline static void read_data(void){
 	while(usb_serial_available() < 4){
 		asm("nop");
@@ -190,14 +202,19 @@ int main(void) {
 		}
 		switch(cmd & CMD_MASK){
 			case CMD_XFER:
-				if(bulk){
-					if(cmd & CMD_FLAG_W){
+				switch(cmd & CMD_FLAG_MASK){
+					case CMD_FLAG_B | CMD_FLAG_W:
 						xfer_bulk_wo();
-					}else{
+						break;
+					case CMD_FLAG_B | CMD_FLAG_R:
 						xfer_bulk_ro();
-					}
-				}else{
-					xfer();
+						break;
+					case CMD_FLAG_B | CMD_FLAG_W | CMD_FLAG_R:
+						xfer_bulk();
+						break;
+					default:
+						xfer();
+						break;
 				}
 				break;
 			case CMD_PING:
