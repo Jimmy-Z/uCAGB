@@ -19,6 +19,7 @@ along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <avr/interrupt.h>
 #include <avr/power.h>
+#include <avr/wdt.h>
 #include <util/delay.h>
 
 #include "usb_serial.h"
@@ -221,15 +222,35 @@ int main(void) {
 	while(!usb_configured()){
 		asm("nop");
 	}
-	_delay_ms(1000);
+
+	// blinking signalling program init or watchdog reset
+	// also waits for host usb
+	LED_ON();
+	_delay_ms(5);
+	LED_OFF();
+	_delay_ms(90);
+	LED_ON();
+	_delay_ms(5);
+	LED_OFF();
+	_delay_ms(800);
+	LED_ON();
+	_delay_ms(5);
+	LED_OFF();
+	_delay_ms(90);
+	LED_ON();
+	_delay_ms(5);
+	LED_OFF();
+
+	wdt_enable(WDTO_2S);
 
 	wait_slave = 0;
 	c_r = 0; c_w = 0; c_x = 0;
 
 	while(1){
 		while(usb_serial_available() < 1){
-			asm("nop");
+			wdt_reset();
 		}
+		wdt_reset();
 		uint8_t cmd = usb_serial_getchar();
 		uint8_t bulk = cmd & CMD_FLAG_B;
 		if(cmd & CMD_FLAG_W){
