@@ -25,7 +25,9 @@ along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "../common/common.h"
 
-inline static void jmp_bl(void){
+// #define TEENSY
+
+static void cleanup(void){
 	// https://www.pjrc.com/teensy/jump_to_bootloader.html
 	cli();
 	UDCON = 1;
@@ -33,61 +35,97 @@ inline static void jmp_bl(void){
 	UCSR1B = 0;
 	_delay_ms(5);
 
-#if defined(__AVR_ATmega32U4__)              // Teensy 2.0
+#if defined(__AVR_ATmega32U4__)		// Teensy 2.0
 	EIMSK = 0; PCICR = 0; SPCR = 0; ACSR = 0; EECR = 0; ADCSRA = 0;
 	TIMSK0 = 0; TIMSK1 = 0; TIMSK3 = 0; TIMSK4 = 0; UCSR1B = 0; TWCR = 0;
 	DDRB = 0; DDRC = 0; DDRD = 0; DDRE = 0; DDRF = 0; TWCR = 0;
 	PORTB = 0; PORTC = 0; PORTD = 0; PORTE = 0; PORTF = 0;
-	asm volatile("jmp 0x7E00");
-#elif defined(__AVR_AT90USB1286__)             // Teensy++ 2.0
+#elif defined(__AVR_AT90USB1286__)	// Teensy++ 2.0
 	EIMSK = 0; PCICR = 0; SPCR = 0; ACSR = 0; EECR = 0; ADCSRA = 0;
 	TIMSK0 = 0; TIMSK1 = 0; TIMSK2 = 0; TIMSK3 = 0; UCSR1B = 0; TWCR = 0;
 	DDRA = 0; DDRB = 0; DDRC = 0; DDRD = 0; DDRE = 0; DDRF = 0;
 	PORTA = 0; PORTB = 0; PORTC = 0; PORTD = 0; PORTE = 0; PORTF = 0;
+#endif
+}
+
+inline static void jmp_bl(void){
+	cleanup();
+#if defined(__AVR_ATmega32U4__)
+#ifdef TEENSY				// Teensy 2.0
+	asm volatile("jmp 0x7E00");
+#else					// Arduino/Genuino Leonardo
+	asm volatile("jmp 0x7000");
+#endif
+#elif defined(__AVR_AT90USB1286__)	// Teensy++ 2.0
 	asm volatile("jmp 0x1FC00");
 #endif
 }
 
-#if defined(__AVR_AT90USB1286__)             // Teensy++ 2.0
+#ifdef TEENSY		// Teensy 2.0 / Teensy++ 2.0
 #define LED_CONFIG()	(DDRD |= (1<<6))
 #define LED_OFF()	(PORTD &= ~(1 << 6))
 #define LED_ON()	(PORTD |= (1 << 6))
+#else			// Arduino/Genuino Leonardo
+#define LED_CONFIG()	(DDRC |= (1 << 7))
+#define LED_OFF()	(PORTC &= ~(1 << 7))
+#define LED_ON()	(PORTC |= (1 << 7))
 #endif
 
+#if 1 // use PORT B
 #define GBA_DDR DDRB
 #define GBA_OUT PORTB
 #define GBA_IN PINB
 #define MOSI_BIT 2
 #define MISO_BIT 3
 #define CLK_BIT 1
+#else // or use PORT D instead
+#define GBA_DDR DDRD
+#define GBA_OUT PORTD
+#define GBA_IN PIND
+#define MOSI_BIT 2
+#define MISO_BIT 3
+#define CLK_BIT 0
+#endif
 
 static uint32_t data, buffer[BULK_SIZE], c_r, c_w, c_x;
-static uint8_t bufpos, wait_slave;
+static uint8_t wait_slave;
 
 inline static void xfer_base(void) {
-	uint8_t i;
-	// manipulating 32bit value in AVR could be slow
-	// maybe I should expand this to 8 bit
-
 	// gbatek says we should wait for SI(slave SO) = LOW
-	// but seems like in multiboot mode the slave doesn't do this?
+	// but seems like GBA doesn't do this in multiboot
 	if(wait_slave){
 		while(GBA_IN & (1 << MISO_BIT)){
 			asm("nop");
 		}
 	}
-	for (i = 0; i < 32; ++i){
+
+#if 0	// manipulating 32 bit variable in AVR could be slow
+	for (uint8_t i = 0; i < 32; ++i){
 		// clear SC and SO
 		GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
 		// set SO accordingly
-		GBA_OUT |= ((data>>31)&1)<<MOSI_BIT;
+		GBA_OUT |= (data>>31)<<MOSI_BIT;
 		// set SC
 		GBA_OUT |= (1<<CLK_BIT);
+		// wait here ?
 		// shift data
 		data <<= 1;
 		// read SI
 		data |= (GBA_IN>>MISO_BIT)&1;
 	}
+#else // 8 bit expansion
+	for(int8_t i = 3; i >= 0; --i){
+		uint8_t d8 = ((uint8_t*)&data)[i];
+		for(uint8_t j = 0; j < 8; ++j){
+			GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
+			GBA_OUT |= (d8>>7)<<MOSI_BIT;
+			GBA_OUT |= (1<<CLK_BIT);
+			d8 <<= 1;
+			d8 |= (GBA_IN>>MISO_BIT)&1;
+		}
+		((uint8_t*)&data)[i] = d8;
+	}
+#endif
 }
 
 inline static void xfer(void){
@@ -168,6 +206,8 @@ inline static void write_data_bulk(void){
 int main(void) {
 	clock_prescale_set(clock_div_1);
 
+	cleanup();
+
 	LED_CONFIG();
 
 	// setup SI pin for input
@@ -183,7 +223,6 @@ int main(void) {
 	}
 	_delay_ms(1000);
 
-	bufpos = 0;
 	wait_slave = 0;
 	c_r = 0; c_w = 0; c_x = 0;
 

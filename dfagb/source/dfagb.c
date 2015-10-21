@@ -15,7 +15,7 @@ void irq_keypad(void){
 }
 
 // serial processings
-u32 so_data = 0x20012015;
+u32 so_data = 0;
 u32 si_data;
 
 void start_serial(){
@@ -25,9 +25,12 @@ void start_serial(){
 
 void irq_serial(void){
 	si_data = REG_SIODATA32;
-	iprintf("SIODATA32: 0x%08x\n", si_data);
+	iprintf("\nSIODATA32: 0x%08x", si_data);
 	start_serial();
 }
+
+#define BUF_SIZE 0x20000
+EWRAM_BSS u8 buf[BUF_SIZE];
 
 int main(void) {
 	// keypad setup
@@ -52,6 +55,8 @@ int main(void) {
 	SetMode(MODE_0 | BG0_ON);
 
 	iprintf(sTitle, __DATE__, __TIME__);
+
+	iprintf("\n%dKB buffer @ 0x%08x", BUF_SIZE >> 10, (u32)buf);
 
 	while (1) {
 		VBlankIntrWait();

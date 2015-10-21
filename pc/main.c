@@ -183,6 +183,8 @@ int main(int argc, const char *argv[]){
 	}
 	fprintf(stderr, "open %s success\n", argv[1]);
 
+	// setup_serial(d);
+
 	if(validate_uC(d)){
 		fprintf(stderr, "ping %s failed\n", argv[1]);
 		return -1;
