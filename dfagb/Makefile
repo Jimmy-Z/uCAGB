@@ -18,9 +18,9 @@ include $(DEVKITARM)/gba_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(shell basename $(CURDIR))_mb
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source ../common
 DATA		:=
-GRAPHICS	:=	gfx	
+GRAPHICS	:=	gfx
 INCLUDES	:=
 
 #---------------------------------------------------------------------------------
@@ -155,7 +155,7 @@ $(OUTPUT).elf	:	$(OFILES)
 # This rule creates assembly source files using grit
 # grit takes an image file and a .grit describing how the file is to be processed
 # add additional rules like this for each image extension
-# you use in the graphics folders 
+# you use in the graphics folders
 #---------------------------------------------------------------------------------
 %.s %.h	: %.bmp %.grit
 #---------------------------------------------------------------------------------

@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "../../common/crc32.h"
+
 const char sTitle[] = "DFAGB - Dumper/Flasher for GBA build %s %s\n";
 
 void irq_keypad(void){
@@ -34,6 +36,9 @@ void irq_serial(void){
 
 #define BUF_SIZE 0x20000
 EWRAM_BSS u8 buf[BUF_SIZE];
+#define buf16 ((u16*)buf)
+#define buf32 ((u32*)buf)
+u32 crc32_table[CRC32_TABLE_LEN];
 
 int main(void) {
 	// keypad setup
@@ -60,6 +65,9 @@ int main(void) {
 	iprintf(sTitle, __DATE__, __TIME__);
 
 	iprintf("\n%dKB buffer @ 0x%08x", BUF_SIZE >> 10, (u32)buf);
+
+	init_crc32_table(crc32_table);
+	iprintf("\nCRC32 table @ 0x%08x", (u32)crc32_table);
 
 	while (1) {
 		VBlankIntrWait();
