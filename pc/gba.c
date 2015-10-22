@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "pl_win.h"
+#include "pl.h"
 #include "../common/common.h"
 #include "gba.h"
 #include "gbaencryption.h"

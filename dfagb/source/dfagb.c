@@ -20,12 +20,15 @@ u32 si_data;
 
 void start_serial(){
 	REG_SIODATA32 = so_data;
+	REG_SIOCNT &= ~(SIO_SO_HIGH);
 	REG_SIOCNT |= SIO_START;
+	REG_SIOCNT |= SIO_SO_HIGH;
 }
 
 void irq_serial(void){
 	si_data = REG_SIODATA32;
 	iprintf("\nSIODATA32: 0x%08x", si_data);
+	++ so_data;
 	start_serial();
 }
 

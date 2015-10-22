@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "pl_win.h"
+#include "pl.h"
 #include "../common/common.h"
 #include "gba.h"
 
@@ -31,6 +31,7 @@ unsigned char *load_rom(const char *filename, tSize *psize){
 int multiboot(tDev d, const char *filename){
 	char *rom;
 	tSize size;
+	u8 c;
 	uint t0, dt;
 
 	rom = load_rom(filename, &size);
@@ -38,6 +39,9 @@ int multiboot(tDev d, const char *filename){
 		fprintf(stderr, "can't open %s\n", filename);
 		return -2;
 	}
+
+	c = CMD_UNSET_WS;
+	write_serial(d, &c, 1);
 
 	if(gba_ready(d)){
 		return -3;
@@ -59,7 +63,7 @@ int multiboot(tDev d, const char *filename){
 void reset_to_bootloader(tDev d){
 	u8 c = CMD_BOOTLOADER;
 	write_serial(d, &c, 1);
-	fprintf(stderr, "jmp_bl command sent\n");
+	fprintf(stderr, "reset to bootloader command sent\n");
 	return;
 }
 
@@ -106,6 +110,7 @@ int serial_bench(tDev d, int mode, int length){
 		}
 	}else if(mode = 3){
 		// similar to mode 2 but uses a single CMD_BW instead of a series of CMD_W
+		// but multiboot code doesn't work this way, still haven't figure this one out
 		mode_str = "32 bytes bulks";
 		c[0] = CMD_FLAG_W | CMD_FLAG_B;
 		for(i = 0; i < length / BULK_SIZE / 4; ++i){
@@ -134,24 +139,39 @@ int serial_bench(tDev d, int mode, int length){
 int x(tDev d, int mode, u32 v){
 	int i;
 	u32 r;
+	u8 buf[BULK_SIZE * 5];
 	u8 c;
+	c = CMD_SET_WS;
+	write_serial(d, &c, 1);
 	switch(mode){
-		case 1:
+		case 0:
 			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
 			write_serial(d, &c, 1);
 			write_serial(d, &v, 4);
 			read_serial(d, &r, 4);
 			fprintf(stderr, "%08x <-> %08x\n", v, r);
 			break;
+		case 1:
+			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
+			for(i = 0; i < BULK_SIZE; ++i){
+				write_serial(d, &c, 1);
+				write_serial(d, &v, 4);
+				read_serial(d, &r, 4);
+				fprintf(stderr, "%08x <-> %08x\n", v, r);
+				++v;
+			}
+			break;
 		case 2:
 			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R | CMD_FLAG_B;
 			write_serial(d, &c, 1);
 			for(i = 0; i < BULK_SIZE; ++i){
-				write_serial(d, &v, 4);
+				((u32*)buf)[i] = v + i;
+				fprintf(stderr, "%08x ->\n", v + i);
 			}
+			write_serial(d, buf, BULK_SIZE << 2);
+			read_serial(d, buf, BULK_SIZE << 2);
 			for(i = 0; i < BULK_SIZE; ++i){
-				read_serial(d, &r, 4);
-				fprintf(stderr, "%08x <-> %08x\n", v, r);
+				fprintf(stderr, "\t-> %08x\n", ((u32*)buf)[i]);
 			}
 			break;
 	}
@@ -172,7 +192,7 @@ int validate_uC(tDev d){
 int main(int argc, const char *argv[]){
 	tDev d;
 	if(argc < 2){
-		fprintf(stderr, "you should at least specify a serial device name");
+		fprintf(stderr, "you should at least specify a serial device name\n");
 		return -1;
 	}
 

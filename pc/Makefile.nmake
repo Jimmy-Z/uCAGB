@@ -1,0 +1,18 @@
+EXECUTABLE = usbagb.exe
+DIR_OBJ = .\obj
+
+{.}.c{$(DIR_OBJ)}.obj:
+	cl /nologo /c /Os /GS /DWINDOWS /Fo$(DIR_OBJ)\ $<
+
+$(EXECUTABLE) : $(DIR_OBJ)\*.obj
+	link /out:$(EXECUTABLE) $(DIR_OBJ)\*.obj
+
+create_dir_obj:
+	@if not exists $(OBJ_DIR) mkdir $(OBJ_DIR)
+
+clean:
+	@if exist $(OBJ_DIR) rmdir /S /Q $(OBJ_DIR)
+	@if exist $(EXECUTABLE) del $(EXECUTABLE)
+
+all: clean create_dir_obj $(EXECUTABLE)
+

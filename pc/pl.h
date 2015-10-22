@@ -1,6 +1,8 @@
+#ifdef WINDOWS
 #include <windows.h>
-
 typedef HANDLE tDev;
+#endif
+
 typedef unsigned int tSize;
 typedef unsigned int uint;
 typedef unsigned int u32;

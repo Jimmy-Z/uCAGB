@@ -10,11 +10,11 @@ the Free Software Foundation, either version 3 of the License, or
 
 DFAGB is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with DFAGB.  If not, see <http://www.gnu.org/licenses/>.
+along with DFAGB. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <avr/interrupt.h>
@@ -36,12 +36,12 @@ static void cleanup(void){
 	UCSR1B = 0;
 	_delay_ms(5);
 
-#if defined(__AVR_ATmega32U4__)		// Teensy 2.0
+#if defined(__AVR_ATmega32U4__)
 	EIMSK = 0; PCICR = 0; SPCR = 0; ACSR = 0; EECR = 0; ADCSRA = 0;
 	TIMSK0 = 0; TIMSK1 = 0; TIMSK3 = 0; TIMSK4 = 0; UCSR1B = 0; TWCR = 0;
 	DDRB = 0; DDRC = 0; DDRD = 0; DDRE = 0; DDRF = 0; TWCR = 0;
 	PORTB = 0; PORTC = 0; PORTD = 0; PORTE = 0; PORTF = 0;
-#elif defined(__AVR_AT90USB1286__)	// Teensy++ 2.0
+#elif defined(__AVR_AT90USB1286__)
 	EIMSK = 0; PCICR = 0; SPCR = 0; ACSR = 0; EECR = 0; ADCSRA = 0;
 	TIMSK0 = 0; TIMSK1 = 0; TIMSK2 = 0; TIMSK3 = 0; UCSR1B = 0; TWCR = 0;
 	DDRA = 0; DDRB = 0; DDRC = 0; DDRD = 0; DDRE = 0; DDRF = 0;
@@ -88,105 +88,81 @@ inline static void jmp_bl(void){
 #define CLK_BIT 0
 #endif
 
+// Voltage Level Translation Output Enable is connected to PD1(SDA/Digital Pin 2)
+#define VLTOE_DDR DDRD
+#define VLTOE_OUT PORTD
+#define VLTOE_BIT 1
+
 static uint32_t data, buffer[BULK_SIZE], c_r, c_w, c_x;
 static uint8_t wait_slave;
 
-inline static void xfer_base(void) {
+inline static void wait(){
 	// gbatek says we should wait for SI(slave SO) = LOW
 	// but seems like GBA doesn't do this in multiboot
 	if(wait_slave){
 		while(GBA_IN & (1 << MISO_BIT)){
 			asm("nop");
 		}
+	}/*else{
+	// and I tried wait for HIGH instead, doesn't work too
+		while(!(GBA_IN & (1 << MISO_BIT))){
+			asm("nop");
+		}
 	}
+	*/
+}
 
-#if 0	// manipulating 32 bit variable in AVR could be slow
-	for (uint8_t i = 0; i < 32; ++i){
-		// clear SC and SO
-		GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
-		// set SO accordingly
-		GBA_OUT |= (data>>31)<<MOSI_BIT;
-		// set SC
-		GBA_OUT |= (1<<CLK_BIT);
-		// wait here ?
-		// shift data
-		data <<= 1;
-		// read SI
-		data |= (GBA_IN>>MISO_BIT)&1;
-	}
-#else // 8 bit expansion
-	for(int8_t i = 3; i >= 0; --i){
-		uint8_t d8 = ((uint8_t*)&data)[i];
-		for(uint8_t j = 0; j < 8; ++j){
+inline static void xfer(void) {
+	cli();
+	wait();
+	for(int8_t j = 3; j >= 0; --j){
+		uint8_t d8 = ((uint8_t*)&data)[j];
+		for(uint8_t i = 0; i < 8; ++i){
 			GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
 			GBA_OUT |= (d8>>7)<<MOSI_BIT;
 			GBA_OUT |= (1<<CLK_BIT);
+			// in my test we don't need to wait anyway
 			d8 <<= 1;
 			d8 |= (GBA_IN>>MISO_BIT)&1;
 		}
-		((uint8_t*)&data)[i] = d8;
+		((uint8_t*)&data)[j] = d8;
 	}
-#endif
-}
-
-inline static void xfer(void){
-	cli();
-	xfer_base();
 	sei();
 	c_x += 4;
 }
 
-inline static void xfer_bulk_ro(void){
-	uint8_t i;
-	cli();
-	for(i = 0; i < BULK_SIZE; ++i){
-		xfer_base();
-		buffer[i] = data;
-	}
-	sei();
-	c_x += (BULK_SIZE << 2);
-}
-
-inline static void xfer_bulk_wo(void){
-	uint8_t i;
-	cli();
-	for(i = 0; i < BULK_SIZE; ++i){
-		data = buffer[i];
-		xfer_base();
-	}
-	sei();
-	c_x += (BULK_SIZE << 2);
-}
-
 inline static void xfer_bulk(void){
-	uint8_t i;
 	cli();
-	for(i = 0; i < BULK_SIZE; ++i){
-		data = buffer[i];
-		xfer_base();
-		buffer[i] = data;
+	for(uint8_t k = 0; k < BULK_SIZE; ++k){
+		wait();
+		for(int8_t j = 3; j >= 0; --j){
+			uint8_t d8 = ((uint8_t*)&buffer[k])[j];
+			for(uint8_t i = 0; i < 8; ++i){
+				GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
+				GBA_OUT |= (d8>>7)<<MOSI_BIT;
+				GBA_OUT |= (1<<CLK_BIT);
+				d8 <<= 1;
+				d8 |= (GBA_IN>>MISO_BIT)&1;
+			}
+			((uint8_t*)&buffer[k])[j] = d8;
+		}
 	}
 	sei();
 	c_x += (BULK_SIZE << 2);
 }
 
 inline static void read_data(void){
-	while(usb_serial_available() < 4){
-		asm("nop");
-	};
-	((uint8_t*)&data)[0] = usb_serial_getchar();
-	((uint8_t*)&data)[1] = usb_serial_getchar();
-	((uint8_t*)&data)[2] = usb_serial_getchar();
-	((uint8_t*)&data)[3] = usb_serial_getchar();
+	for(uint8_t i = 0; i < 4; ++i){
+		while(usb_serial_available() < 1);
+		((uint8_t*)&data)[i] = usb_serial_getchar();
+	}
 	c_r += 4;
 }
 
 inline static void read_data_bulk(void){
 	uint8_t i;
-	while(usb_serial_available() < (BULK_SIZE << 2)){
-		asm("nop");
-	};
-	for(i = 0; i < (BULK_SIZE << 2); ++i){
+	for(uint8_t i = 0; i < (BULK_SIZE << 2); ++i){
+		while(usb_serial_available() < 1);
 		((uint8_t*)buffer)[i] = usb_serial_getchar();
 	}
 	c_r += (BULK_SIZE << 2);
@@ -194,13 +170,13 @@ inline static void read_data_bulk(void){
 
 inline static void write_data(void){
 	usb_serial_write((uint8_t*)&data, 4);
-	usb_serial_flush_output();
+	// usb_serial_flush_output();
 	c_w += 4;
 }
 
 inline static void write_data_bulk(void){
 	usb_serial_write((uint8_t*)buffer, (BULK_SIZE << 2));
-	usb_serial_flush_output();
+	// usb_serial_flush_output();
 	c_w += (BULK_SIZE << 2);
 }
 
@@ -218,28 +194,24 @@ int main(void) {
 	// set SC
 	GBA_OUT |= (1 << CLK_BIT);
 
+	// enable VLT OE
+	VLTOE_DDR |= (1 << VLTOE_BIT);
+	VLTOE_OUT |= (1 << VLTOE_BIT);
+
 	usb_init();
 	while(!usb_configured()){
-		asm("nop");
+		_delay_ms(1);
 	}
 
 	// blinking signalling program init or watchdog reset
 	// also waits for host usb
-	LED_ON();
-	_delay_ms(5);
-	LED_OFF();
-	_delay_ms(90);
-	LED_ON();
-	_delay_ms(5);
-	LED_OFF();
+	LED_ON(); _delay_ms(6); LED_OFF();
+	_delay_ms(100);
+	LED_ON(); _delay_ms(6); LED_OFF();
 	_delay_ms(800);
-	LED_ON();
-	_delay_ms(5);
-	LED_OFF();
-	_delay_ms(90);
-	LED_ON();
-	_delay_ms(5);
-	LED_OFF();
+	LED_ON(); _delay_ms(6); LED_OFF();
+	_delay_ms(100);
+	LED_ON(); _delay_ms(6); LED_OFF();
 
 	wdt_enable(WDTO_2S);
 
@@ -255,26 +227,20 @@ int main(void) {
 		uint8_t bulk = cmd & CMD_FLAG_B;
 		if(cmd & CMD_FLAG_W){
 			if(bulk){
+				// LED_ON();
 				read_data_bulk();
+				// _delay_ms(5);
+				// LED_OFF();
 			}else{
 				read_data();
 			}
 		}
 		switch(cmd & CMD_MASK){
 			case CMD_XFER:
-				switch(cmd & CMD_FLAG_MASK){
-					case CMD_FLAG_B | CMD_FLAG_W:
-						xfer_bulk_wo();
-						break;
-					case CMD_FLAG_B | CMD_FLAG_R:
-						xfer_bulk_ro();
-						break;
-					case CMD_FLAG_B | CMD_FLAG_W | CMD_FLAG_R:
-						xfer_bulk();
-						break;
-					default:
-						xfer();
-						break;
+				if(bulk){
+					xfer_bulk();
+				}else{
+					xfer();
 				}
 				break;
 			case CMD_PING:

@@ -42,7 +42,7 @@
 
 // You can change these to give your code its own name.  On Windows,
 // these are only used before an INF file (driver install) is loaded.
-#define STR_MANUFACTURER	L"AGB SIO NORMAL"
+#define STR_MANUFACTURER	L"AGB SIO"
 #define STR_PRODUCT		L"USB Serial"
 
 // All USB serial devices are supposed to have a serial number
