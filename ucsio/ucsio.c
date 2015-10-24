@@ -94,21 +94,21 @@ inline static void jmp_bl(void){
 #define VLTOE_BIT 1
 
 static uint32_t data, buffer[BULK_SIZE], c_r, c_w, c_x;
-static uint8_t wait_param;
+static uint8_t wait_p0, wait_p1;
 
 inline static void wait(void){
-	if(!wait_param){
+	if(!wait_p0){
 		// no wait
 		return;
 	}
-	if(wait_param == 1){
+	if(wait_p0 == 1){
 		// gbatek says we should wait for SI(slave SO) = LOW
 		while(GBA_IN & (1 << MISO_BIT));
 	}else{
 		// but seems like GBA doesn't do this in multiboot
 		// I tried wait for HIGH instead, doesn't work too
 		// so this is just a dumb loop here
-		uint8_t i = wait_param;
+		uint8_t i = wait_p0;
 		while(--i){
 			asm("nop");
 		}
@@ -121,10 +121,19 @@ inline static void xfer(void) {
 	for(int8_t j = 3; j >= 0; --j){
 		uint8_t d8 = ((uint8_t*)&data)[j];
 		for(uint8_t i = 0; i < 8; ++i){
+			// SC = LOW, SO = LOW
 			GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
+			// SO accordingly
 			GBA_OUT |= (d8>>7)<<MOSI_BIT;
+			/*
+			uint8_t w = wait_p1;
+			while(--w){
+				asm("nop");
+			}
+			*/
+			// SC = HIGH
 			GBA_OUT |= (1<<CLK_BIT);
-			// in my test we don't need to wait anyway
+			// read SI
 			d8 <<= 1;
 			d8 |= (GBA_IN>>MISO_BIT)&1;
 		}
@@ -143,6 +152,12 @@ inline static void xfer_bulk(void){
 			for(uint8_t i = 0; i < 8; ++i){
 				GBA_OUT &= ~((1<<CLK_BIT) | (1<<MOSI_BIT));
 				GBA_OUT |= (d8>>7)<<MOSI_BIT;
+				/*
+				uint8_t w = wait_p1;
+				while(--w){
+					asm("nop");
+				}
+				*/
 				GBA_OUT |= (1<<CLK_BIT);
 				d8 <<= 1;
 				d8 |= (GBA_IN>>MISO_BIT)&1;
@@ -217,7 +232,7 @@ int main(void) {
 
 	wdt_enable(WDTO_2S);
 
-	wait_param = 0;
+	wait_p0 = 0, wait_p1 = 0;
 	c_r = 0; c_w = 0; c_x = 0;
 
 	while(1){
@@ -261,7 +276,8 @@ int main(void) {
 				c_r = 0; c_w = 0; c_x = 0;
 				break;
 			case CMD_SET_WAIT:
-				wait_param = (uint8_t)data;
+				wait_p0 = (uint8_t)(data & 0xff);
+				wait_p1 = (uint8_t)((data >> 8)& 0xff);
 				break;
 		}
 		if(cmd & CMD_FLAG_R){

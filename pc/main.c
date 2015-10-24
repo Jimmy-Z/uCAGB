@@ -1,15 +1,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "pl.h"
 #include "../common/common.h"
+#include "../common/crc32.h"
+#include "pl.h"
 #include "gba.h"
+
+u32 crc32_table[CRC32_TABLE_LEN];
 
 uint align(uint a, uint b){
 	return (a + b - 1) & (~(b - 1));
 }
 
-unsigned char *load_rom(const char *filename, tSize *psize){
+unsigned char *load_file(const char *filename, tSize *psize, tSize a){
 	tSize size;
 	FILE *f;
 	unsigned char *data;
@@ -19,7 +22,7 @@ unsigned char *load_rom(const char *filename, tSize *psize){
 	}
 	fseek(f, 0, SEEK_END);
 	size = ftell(f);
-	*psize = align(size, BULK_SIZE << 2);
+	*psize = align(size, a);
 	data = malloc(*psize);
 	memset(data, 0, *psize);
 	fseek(f, 0, SEEK_SET);
@@ -28,9 +31,20 @@ unsigned char *load_rom(const char *filename, tSize *psize){
 	return data;
 }
 
-void set_wait(tDev d, u8 wait){
-	u8 c[] = {CMD_SET_WAIT | CMD_FLAG_W, wait, 0, 0, 0};
-	fprintf(stderr, "set wait = %d\n", wait);
+void save_file(const char *filename, const void *buf, tSize size){
+	FILE *f;
+	f = fopen(filename, "wb");
+	if(!f){
+		fprintf(stderr, "failed to open \"%s\" for write\n", filename);
+		return;
+	}
+	fwrite(buf, size, 1, f);
+	fclose(f);
+}
+
+void set_wait(tDev d, u8 wait_p0, u8 wait_p1){
+	u8 c[] = {CMD_SET_WAIT | CMD_FLAG_W, wait_p0, wait_p1, 0, 0};
+	fprintf(stderr, "set_wait(%d, %d)\n", wait_p0, wait_p1);
 	write_serial(d, &c, 5);
 }
 
@@ -40,13 +54,13 @@ int multiboot(tDev d, const char *filename){
 	u8 c;
 	uint t0, dt;
 
-	rom = load_rom(filename, &size);
+	rom = load_file(filename, &size, BULK_SIZE << 2);
 	if(rom == NULL){
 		fprintf(stderr, "can't open %s\n", filename);
 		return -2;
 	}
 
-	set_wait(d, 0);
+	set_wait(d, 0, 0);
 
 	if(gba_ready(d)){
 		return -3;
@@ -84,7 +98,7 @@ int serial_bench(tDev d, int mode, int length){
 	fprintf(stderr, "starting %d bytes serial speed test\n", length);
 	t0 = get_rtime();
 	if(mode == 0){
-		// 4 bytes per write, the slowest
+		// 4 bytes per write, the simplest and slowest
 		mode_str = "32 bit";
 		c[0] = CMD_FLAG_W;
 		c[1] = 0; c[2] = 0; c[3] = 0; c[4] = 0;
@@ -104,7 +118,7 @@ int serial_bench(tDev d, int mode, int length){
 		write_serial(d, p, length / 4 * 5);
 	}else if(mode == 2){
 		// BULK_SIZE per write, performance close to mode 1 in this test
-		// but only improve real world multiboot performance a tiny bit
+		// but overall real world multiboot performance is only a tiny bit better than mode 0
 		mode_str = "32 bytes semi bulks";
 		memset(c, 0, BULK_SIZE * 5);
 		for(i = 0; i < BULK_SIZE; ++i){
@@ -114,8 +128,9 @@ int serial_bench(tDev d, int mode, int length){
 			write_serial(d, c, BULK_SIZE * 5);
 		}
 	}else if(mode = 3){
-		// similar to mode 2 but uses a single CMD_BW instead of a series of CMD_W
-		// but multiboot code doesn't work this way, still haven't figure this one out
+		// similar to mode 2 but uses a single CMD_WB instead of a series of CMD_W
+		// better than mode 2, I guess that's because the reduced write amp(5/4 -> 33/32)
+		// but multiboot need a huge wait between xfer, overall multiboot performance worse than mode 2
 		mode_str = "32 bytes bulks";
 		c[0] = CMD_FLAG_W | CMD_FLAG_B;
 		for(i = 0; i < length / BULK_SIZE / 4; ++i){
@@ -141,48 +156,46 @@ int serial_bench(tDev d, int mode, int length){
 	return 0;
 }
 
-int x(tDev d, int mode, u32 v){
-	int i;
+void df_wait(tDev d, const char * msg){
 	u32 r;
-	u8 buf[BULK_SIZE * 5];
-	u8 c;
-	set_wait(d, 1);
-	switch(mode){
-		case 0:
-			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
-			write_serial(d, &c, 1);
-			write_serial(d, &v, 4);
-			read_serial(d, &r, 4);
-			fprintf(stderr, "%08x <-> %08x\n", v, r);
-			break;
-		case 1:
-			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
-			for(i = 0; i < BULK_SIZE; ++i){
-				write_serial(d, &c, 1);
-				write_serial(d, &v, 4);
-				read_serial(d, &r, 4);
-				fprintf(stderr, "%08x <-> %08x\n", v, r);
-				++v;
-			}
-			break;
-		case 2:
-			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R | CMD_FLAG_B;
-			write_serial(d, &c, 1);
-			for(i = 0; i < BULK_SIZE; ++i){
-				((u32*)buf)[i] = v + i;
-				fprintf(stderr, "%08x ->\n", v + i);
-			}
-			write_serial(d, buf, BULK_SIZE << 2);
-			read_serial(d, buf, BULK_SIZE << 2);
-			for(i = 0; i < BULK_SIZE; ++i){
-				fprintf(stderr, "\t-> %08x\n", ((u32*)buf)[i]);
-			}
-			break;
-	}
-	return 0;
+	do{
+		r = xfer32(d, DF_CMD_NOP);
+		sleep(1000/0x10);
+		fprintf(stderr, "\rwaiting for %s, response: 0x%08x", msg, r);
+	}while(r != DF_STATE_IDLE);
+	fprintf(stderr, "\n%s done\n", msg);
 }
 
-int df(tDev d, int mode, u32 v){
+int df_test(tDev d, int mode, unsigned seed){
+	u8 buf[AGB_BUF_SIZE];
+	unsigned i, crc;
+	set_wait(d, 1, 0);
+	// fprintf(stderr, "RAND_MAX = 0x%08x\n", RAND_MAX);
+	srand(seed);
+	for(i = 0; i < AGB_BUF_SIZE; ++i){
+		buf[i] = rand() & 0xff;
+	}
+	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
+	save_file("128K.a.bin", buf, AGB_BUF_SIZE);
+	fprintf(stderr, "random buffer CRC32: 0x%08x\n", crc);
+
+	df_wait(d, "DFAGB");
+	xfer32wo(d, DF_CMD_UPLOAD | (AGB_BUF_SIZE >> 2));
+	xfer32bw(d, buf, AGB_BUF_SIZE);
+	fprintf(stderr, "upload to DFAGB complete");
+
+	xfer32wo(d, DF_CMD_CRC32 | AGB_BUF_SIZE);
+	df_wait(d, "CRC32");
+	xfer32wo(d, DF_CMD_READ);
+	crc = xfer32ro(d);
+	fprintf(stderr, "DFAGB returned CRC32: 0x%08x\n", crc);
+
+	xfer32wo(d, DF_CMD_DOWNLOAD | (AGB_BUF_SIZE >> 2));
+	xfer32br(d, buf, AGB_BUF_SIZE);
+	save_file("128K.b.bin", buf, AGB_BUF_SIZE);
+	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
+	fprintf(stderr, "read from DFAGB complete, buffer CRC32: 0x%08x\n", crc);
+
 	return 0;
 }
 
@@ -199,6 +212,9 @@ int validate_uC(tDev d){
 
 int main(int argc, const char *argv[]){
 	tDev d;
+
+	init_crc32_table(crc32_table);
+
 	if(argc < 2){
 		fprintf(stderr, "you should at least specify a serial device name\n");
 		return -1;
@@ -225,8 +241,8 @@ int main(int argc, const char *argv[]){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){
 		return serial_bench(d, atoi(argv[3]), atoi(argv[4]));
-	}else if(argc == 5 && !strcmp(argv[2], "x")){
-		return x(d, atoi(argv[3]), strtoul(argv[4], NULL, 0x10));
+	}else if(argc == 5 && !strcmp(argv[2], "df")){
+		return df_test(d, atoi(argv[3]), strtoul(argv[4], NULL, 0x10));
 	}else{
 		fprintf(stderr, "invalid parameters, example:\n\t%s COM1 multiboot your_file.gba\n", argv[0]);
 		return -1;

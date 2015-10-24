@@ -25,7 +25,7 @@ void xfer32wo(tDev d, u32 data){
 // read only
 u32 xfer32ro(tDev d){
 	u8 c[4];
-	c[0] = CMD_XFER | CMD_FLAG_W;
+	c[0] = CMD_XFER | CMD_FLAG_R;
 	write_serial(d, c, 1);
 	read_serial(d, c, 4);
 	return *(u32*)c;
@@ -34,7 +34,7 @@ u32 xfer32ro(tDev d){
 // PC -> uC use bulk read/write in a single CMD_XWB command
 // so uC -> GBA will use bulk xfer too
 // this need set_wait(22) to work with multiboot
-void xfer32bw(tDev d, u8* data, tSize size){
+void xfer32bw(tDev d, const u8* data, tSize size){
 	u8 c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_B;
 	uint i;
 	for(i = 0; i < size / (BULK_SIZE << 2); ++i){

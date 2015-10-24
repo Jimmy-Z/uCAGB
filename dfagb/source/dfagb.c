@@ -17,18 +17,20 @@ void irq_keypad(void){
 	SystemCall(0x26);
 }
 
-// 128K bytes buffer, thats
-#define BUF_SIZE 0x20000
-EWRAM_BSS u8 buf[BUF_SIZE];
+// 128K bytes buffer
+EWRAM_BSS u8 buf[AGB_BUF_SIZE];
 #define buf16 ((u16*)buf)
 #define buf32 ((u32*)buf)
 u32 crc32_table[CRC32_TABLE_LEN];
 
-// SIO FSM stat and parameters
-#define SIO_IDLE 0
-#define SIO_UPLOAD 1
-#define SIO_DOWNLOAD 2
-u32 sio_state, sio_p0, sio_p1, sio_p3, sio_p4;
+// FSM stat and parameters
+#define FSM_IDLE	0
+#define FSM_UPLOADING	1
+#define FSM_DOWNLOADING	2
+#define FSM_READING	3
+#define FSM_WORKER	0x10
+// if I don't declare this as volatile, worker never wakes up, why?
+volatile u32 fsm_state, fsm_p0, fsm_p1, fsm_p3, fsm_p4;
 
 void start_serial(u32 out32){
 	REG_SIODATA32 = out32;
@@ -38,11 +40,11 @@ void start_serial(u32 out32){
 }
 
 /*
-upload 4 example
+upload 4*u32 example
 ===
 	s == idle, out == idle
-00010004	<->	<IDLE>
-	s = upload, s0 = 4, p1 = 0
+01000004	<->	<IDLE>
+	s = uploading, s0 = 4, p1 = 0
 <payload0>	<->	<undefined>
 	buf[0] = payload0, p1 = 1
 <payload1>	<->	<undefined>
@@ -53,76 +55,120 @@ upload 4 example
 	buf[3] = payload3, p1 = 4, s = idle, out = idle
 <nop>		<->	<IDLE>
 
-download 4 example
+download 4*u32 example
 ===
 	s == idle, out == idle
-00020004	<->	<IDLE>
-	s = download, s0 = 4, p1 = 0, out = buf[0], p1 = 1
+02000004	<->	<IDLE>
+	s = downloading, s0 = 4, p1 = 0, out = buf[0], p1 = 1
 <undefined>	<->	buf[0]
 	out = buf[1], p1 = 2
 <undefined>	<->	buf[1]
 	out = buf[2], p1 = 3
 <undefined>	<->	buf[2]
 	out = buf[3], p1 = 4
+	you might argue that we can set state to idle now
+	but then the next input will be treated as a new command
 <undefined>	<->	buf[3]
 	s = idle, out = idle
 <nop>		<-> 	<IDLE>
+
+worker example
+===
+	s == idle, out == idle
+
 */
 void irq_serial(void){
 	u32 in32 = REG_SIODATA32, out32 = DF_STATE_IDLE;
-	switch(sio_state){
-		case SIO_IDLE:
+	switch(fsm_state){
+		case FSM_IDLE:
 			switch(in32 & 0xff000000){
 				case DF_CMD_UPLOAD:
 					// upload to buf
-					sio_state = SIO_UPLOAD;
+					fsm_state = FSM_UPLOADING;
 					// length, of u32
-					sio_p0 = in32 & 0x0000ffff;
-					iprintf("\nstart uploading %d bytes", sio_p0 << 2);
+					fsm_p0 = in32 & 0x00ffffff;
+					// TODO: we should complain about size exceeds buffer length
+					iprintf("\nuploading %d bytes", fsm_p0 << 2);
 					// current offset
-					sio_p1 = 0;
+					fsm_p1 = 0;
 					// during upload, the PC side doesn't care about data they receive
 					break;
 				case DF_CMD_DOWNLOAD:
 					// download to buf
-					sio_state = SIO_DOWNLOAD;
+					fsm_state = FSM_DOWNLOADING;
 					// length, of u32
-					sio_p0 = in32 & 0x0000ffff;
-					iprintf("\nstart downloading %d bytes", sio_p0 << 2);
+					fsm_p0 = in32 & 0x00ffffff;
+					// TODO: we should complain about size exceeds buffer length
+					iprintf("\ndownloading %d bytes", fsm_p0 << 2);
 					// current offset
-					sio_p1 = 0;
+					fsm_p1 = 0;
 					// PC is expecting data on the next return
-					out32 = buf32[sio_p1++];
+					out32 = buf32[fsm_p1++];
 					break;
-				// case DF_CMD_FLASH:
+				case DF_CMD_READ:
+					// read p0
+					out32 = fsm_p0;
+					fsm_state = FSM_READING;
+					break;
+				case DF_CMD_CRC32:
+				case DF_CMD_FLASH:
+				case DF_CMD_DUMP:
+				case DF_CMD_READ_SRAM:
+				case DF_CMD_WRITE_SRAM:
+				case DF_CMD_READ_FLASH:
+				case DF_CMD_WRITE_FLASH:
+				case DF_CMD_READ_EEPROM:
+				case DF_CMD_WRITE_EEPROM:
+					fsm_p0 = in32;
+					out32 = DF_STATE_BUSY;
+					fsm_state = FSM_WORKER;
+					// iprintf("\nworker command: 0x%08x", in32);
+					break;
 				// case DF_CMD_NOP & 0xff000000:
 				default:
 					if(in32 != DF_CMD_NOP){
-						iprintf("\ninvalid command: 0x%08x", in32);
+						iprintf("\ninvalid command");
 					}
 					break;
 			}
 			break;
-		case SIO_UPLOAD:
-			buf32[sio_p1++] = in32;
-			if(sio_p1 >= sio_p0){
-				sio_state = SIO_IDLE;
+		case FSM_UPLOADING:
+			buf32[fsm_p1++] = in32;
+			if(fsm_p1 >= fsm_p0){
+				fsm_state = FSM_IDLE;
 				iprintf("\nupload complete");
 			}
 			break;
-		case SIO_DOWNLOAD:
-			if(sio_p1 < sio_p0){
-				out32 = buf32[sio_p1++];
+		case FSM_DOWNLOADING:
+			if(fsm_p1 < fsm_p0){
+				out32 = buf32[fsm_p1++];
 			}else{
-				sio_state = SIO_IDLE;
+				fsm_state = FSM_IDLE;
 				iprintf("\ndownload complete");
 			}
+			break;
+		case FSM_READING:
+			fsm_state = FSM_IDLE;
+			break;
+		case FSM_WORKER:
+			out32 = DF_STATE_BUSY;
 			break;
 	}
 	start_serial(out32);
 }
 
-// WORKER FSM and states
+void worker(void){
+	switch(fsm_p0 & 0xff000000){
+		case DF_CMD_CRC32:
+			iprintf("\nCRC32(0x%06x):", fsm_p0 & 0x00ffffff);
+			fsm_p0 = crc32(crc32_table, 0, buf, fsm_p0 & 0x00ffffff);
+			iprintf(" 0x%08x", fsm_p0);
+			break;
+		default:
+			iprintf("\ninvalid worker command");
+	}
+	fsm_state = FSM_IDLE;
+}
 
 int main(void) {
 	// keypad setup
@@ -138,7 +184,7 @@ int main(void) {
 	irqSet(IRQ_SERIAL, irq_serial);
 	irqEnable(IRQ_VBLANK | IRQ_KEYPAD | IRQ_SERIAL);
 
-	sio_state = SIO_IDLE;
+	fsm_state = FSM_IDLE;
 	start_serial(DF_STATE_IDLE);
 
 	// console setup, see libdgba/src/console.c for details
@@ -149,13 +195,17 @@ int main(void) {
 
 	iprintf(sTitle, __DATE__, __TIME__);
 
-	iprintf("\n%dKB buffer @ 0x%08x", BUF_SIZE >> 10, (u32)buf);
+	//iprintf("\n%dKB buffer @ 0x%08x", AGB_BUF_SIZE >> 10, (u32)buf);
 
 	init_crc32_table(crc32_table);
 	iprintf("\nCRC32 table @ 0x%08x", (u32)crc32_table);
 
 	while (1) {
+		// TODO: a shorter wait
 		VBlankIntrWait();
+		if(fsm_state == FSM_WORKER){
+			worker();
+		}
 	}
 
 }
