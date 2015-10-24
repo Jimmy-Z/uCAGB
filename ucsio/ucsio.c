@@ -94,22 +94,25 @@ inline static void jmp_bl(void){
 #define VLTOE_BIT 1
 
 static uint32_t data, buffer[BULK_SIZE], c_r, c_w, c_x;
-static uint8_t wait_slave;
+static uint8_t wait_param;
 
-inline static void wait(){
-	// gbatek says we should wait for SI(slave SO) = LOW
-	// but seems like GBA doesn't do this in multiboot
-	if(wait_slave){
-		while(GBA_IN & (1 << MISO_BIT)){
-			asm("nop");
-		}
-	}/*else{
-	// and I tried wait for HIGH instead, doesn't work too
-		while(!(GBA_IN & (1 << MISO_BIT))){
+inline static void wait(void){
+	if(!wait_param){
+		// no wait
+		return;
+	}
+	if(wait_param == 1){
+		// gbatek says we should wait for SI(slave SO) = LOW
+		while(GBA_IN & (1 << MISO_BIT));
+	}else{
+		// but seems like GBA doesn't do this in multiboot
+		// I tried wait for HIGH instead, doesn't work too
+		// so this is just a dumb loop here
+		uint8_t i = wait_param;
+		while(--i){
 			asm("nop");
 		}
 	}
-	*/
 }
 
 inline static void xfer(void) {
@@ -160,7 +163,6 @@ inline static void read_data(void){
 }
 
 inline static void read_data_bulk(void){
-	uint8_t i;
 	for(uint8_t i = 0; i < (BULK_SIZE << 2); ++i){
 		while(usb_serial_available() < 1);
 		((uint8_t*)buffer)[i] = usb_serial_getchar();
@@ -215,7 +217,7 @@ int main(void) {
 
 	wdt_enable(WDTO_2S);
 
-	wait_slave = 0;
+	wait_param = 0;
 	c_r = 0; c_w = 0; c_x = 0;
 
 	while(1){
@@ -258,11 +260,8 @@ int main(void) {
 				buffer[2] = c_x;
 				c_r = 0; c_w = 0; c_x = 0;
 				break;
-			case CMD_SET_WS:
-				wait_slave = 1;
-				break;
-			case CMD_UNSET_WS:
-				wait_slave = 0;
+			case CMD_SET_WAIT:
+				wait_param = (uint8_t)data;
 				break;
 		}
 		if(cmd & CMD_FLAG_R){

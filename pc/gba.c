@@ -14,6 +14,7 @@ u32 xfer32(tDev d, u32 data){
 	return *(u32*)c;
 }
 
+// write only
 void xfer32wo(tDev d, u32 data){
 	u8 c[5];
 	c[0] = CMD_XFER | CMD_FLAG_W;
@@ -21,8 +22,39 @@ void xfer32wo(tDev d, u32 data){
 	write_serial(d, c, 5);
 }
 
-// semi bulk mode, PC -> uC use bulk write, but that's just an array of CMD_WX
-void xfer32sb(tDev d, u8* data, tSize size){
+// read only
+u32 xfer32ro(tDev d){
+	u8 c[4];
+	c[0] = CMD_XFER | CMD_FLAG_W;
+	write_serial(d, c, 1);
+	read_serial(d, c, 4);
+	return *(u32*)c;
+}
+
+// PC -> uC use bulk read/write in a single CMD_XWB command
+// so uC -> GBA will use bulk xfer too
+// this need set_wait(22) to work with multiboot
+void xfer32bw(tDev d, u8* data, tSize size){
+	u8 c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_B;
+	uint i;
+	for(i = 0; i < size / (BULK_SIZE << 2); ++i){
+		write_serial(d, &c, 1);
+		write_serial(d, data + i * (BULK_SIZE << 2), BULK_SIZE << 2);
+	}
+}
+
+void xfer32br(tDev d, u8* data, tSize size){
+	u8 c = CMD_XFER | CMD_FLAG_R | CMD_FLAG_B;
+	uint i;
+	for(i = 0; i < size / (BULK_SIZE << 2); ++i){
+		write_serial(d, &c, 1);
+		read_serial(d, data + i * (BULK_SIZE << 2), BULK_SIZE << 2);
+	}
+}
+
+// semi bulk mode, PC -> uC use bulk write, but that's just an array of CMD_XW
+// well this one works with multiboot with set_wait(0)
+static void xfer32sbw(tDev d, u8* data, tSize size){
 	u8 c[BULK_SIZE * 5];
 	uint i, j;
 	for(i = 0; i < BULK_SIZE; ++i){
@@ -34,14 +66,6 @@ void xfer32sb(tDev d, u8* data, tSize size){
 		}
 		write_serial(d, c, BULK_SIZE * 5);
 	}
-}
-
-// PC -> uC use bulk write in a single CMD_BWX command
-// so uC -> GBA will use bulk xfer too
-void xfer32b(tDev d, u8* data, tSize size){
-	u8 c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_B;
-	write_serial(d, &c, 1);
-	write_serial(d, data, size);
 }
 
 static uint xfer16(tDev d, uint data){
@@ -137,7 +161,7 @@ static int gba_send_main(tDev d, u8 *rom, tSize size){
 #if USE_BULK
 	}
 	fprintf(stderr, "sending main block...\n");
-	xfer32sb(d, rom + 0xc0, size - 0xc0);
+	xfer32sbw(d, rom + 0xc0, size - 0xc0);
 #else
 		xfer32wo(d, *p);
 	}

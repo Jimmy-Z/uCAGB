@@ -28,6 +28,12 @@ unsigned char *load_rom(const char *filename, tSize *psize){
 	return data;
 }
 
+void set_wait(tDev d, u8 wait){
+	u8 c[] = {CMD_SET_WAIT | CMD_FLAG_W, wait, 0, 0, 0};
+	fprintf(stderr, "set wait = %d\n", wait);
+	write_serial(d, &c, 5);
+}
+
 int multiboot(tDev d, const char *filename){
 	char *rom;
 	tSize size;
@@ -40,8 +46,7 @@ int multiboot(tDev d, const char *filename){
 		return -2;
 	}
 
-	c = CMD_UNSET_WS;
-	write_serial(d, &c, 1);
+	set_wait(d, 0);
 
 	if(gba_ready(d)){
 		return -3;
@@ -141,8 +146,7 @@ int x(tDev d, int mode, u32 v){
 	u32 r;
 	u8 buf[BULK_SIZE * 5];
 	u8 c;
-	c = CMD_SET_WS;
-	write_serial(d, &c, 1);
+	set_wait(d, 1);
 	switch(mode){
 		case 0:
 			c = CMD_XFER | CMD_FLAG_W | CMD_FLAG_R;
@@ -175,6 +179,10 @@ int x(tDev d, int mode, u32 v){
 			}
 			break;
 	}
+	return 0;
+}
+
+int df(tDev d, int mode, u32 v){
 	return 0;
 }
 

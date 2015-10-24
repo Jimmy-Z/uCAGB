@@ -11,8 +11,7 @@
 #define CMD_PING	(2 << CMD_FLAG_BITS)
 #define CMD_BOOTLOADER	(3 << CMD_FLAG_BITS)
 #define CMD_COUNTER	(4 << CMD_FLAG_BITS)
-#define CMD_SET_WS	(5 << CMD_FLAG_BITS)
-#define CMD_UNSET_WS	(6 << CMD_FLAG_BITS)
+#define CMD_SET_WAIT	(5 << CMD_FLAG_BITS)
 
 #define BULK_SIZE 8 // u32[8]
 
