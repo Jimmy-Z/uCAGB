@@ -52,7 +52,7 @@ int multiboot(tDev d, const char *filename){
 	char *rom;
 	tSize size;
 	u8 c;
-	uint t0, dt;
+	uint t;
 
 	rom = load_file(filename, &size, BULK_SIZE << 2);
 	if(rom == NULL){
@@ -66,14 +66,14 @@ int multiboot(tDev d, const char *filename){
 		return -3;
 	}
 
-	t0 = get_rtime();
+	t = get_rtime();
 	if(gba_multiboot(d, rom, size)){
 		return -4;
 	}
 
-	dt = get_rtime() - t0;
+	t = get_rtime() - t;
 	fprintf(stderr, "transfer time: %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
-		dt / 1000.0, size * 8.0 / dt, size * 1.0 / dt);
+		t / 1000.0, size * 8.0 / t, size * 1.0 / t);
 
 	return 0;
 }
@@ -163,12 +163,12 @@ void df_wait(tDev d, const char * msg){
 		sleep(1000/0x10);
 		fprintf(stderr, "\rwaiting for %s, response: 0x%08x", msg, r);
 	}while(r != DF_STATE_IDLE);
-	fprintf(stderr, "\n%s done\n", msg);
+	fprintf(stderr, "\n%s ready\n", msg);
 }
 
 int df_test(tDev d, int mode, unsigned seed){
 	u8 buf[AGB_BUF_SIZE];
-	unsigned i, crc;
+	unsigned i, crc, t;
 	set_wait(d, 1, 0);
 	// fprintf(stderr, "RAND_MAX = 0x%08x\n", RAND_MAX);
 	srand(seed);
@@ -176,13 +176,17 @@ int df_test(tDev d, int mode, unsigned seed){
 		buf[i] = rand() & 0xff;
 	}
 	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
-	save_file("128K.a.bin", buf, AGB_BUF_SIZE);
+	// save_file("128K.a.bin", buf, AGB_BUF_SIZE);
 	fprintf(stderr, "random buffer CRC32: 0x%08x\n", crc);
 
 	df_wait(d, "DFAGB");
+	fprintf(stderr, "uploading to DFAGB...\n");
+	t = get_rtime();
 	xfer32wo(d, DF_CMD_UPLOAD | (AGB_BUF_SIZE >> 2));
 	xfer32bw(d, buf, AGB_BUF_SIZE);
-	fprintf(stderr, "upload to DFAGB complete");
+	t = get_rtime() - t;
+	fprintf(stderr, "upload to DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
+		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
 
 	xfer32wo(d, DF_CMD_CRC32 | AGB_BUF_SIZE);
 	df_wait(d, "CRC32");
@@ -190,11 +194,17 @@ int df_test(tDev d, int mode, unsigned seed){
 	crc = xfer32ro(d);
 	fprintf(stderr, "DFAGB returned CRC32: 0x%08x\n", crc);
 
+	fprintf(stderr, "downloading from DFAGB...\n");
+
+	t = get_rtime();
 	xfer32wo(d, DF_CMD_DOWNLOAD | (AGB_BUF_SIZE >> 2));
 	xfer32br(d, buf, AGB_BUF_SIZE);
-	save_file("128K.b.bin", buf, AGB_BUF_SIZE);
+	t = get_rtime() - t;
+	fprintf(stderr, "download from DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
+		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+	// save_file("128K.b.bin", buf, AGB_BUF_SIZE);
 	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
-	fprintf(stderr, "read from DFAGB complete, buffer CRC32: 0x%08x\n", crc);
+	fprintf(stderr, "buffer CRC32: 0x%08x\n", crc);
 
 	return 0;
 }

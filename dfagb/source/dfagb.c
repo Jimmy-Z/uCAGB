@@ -29,7 +29,8 @@ u32 crc32_table[CRC32_TABLE_LEN];
 #define FSM_DOWNLOADING	2
 #define FSM_READING	3
 #define FSM_WORKER	0x10
-// if I don't declare this as volatile, worker never wakes up, why?
+// if I don't declare this as volatile, worker never wakes up
+// some ridiculous compiler stunts?
 volatile u32 fsm_state, fsm_p0, fsm_p1, fsm_p3, fsm_p4;
 
 void start_serial(u32 out32){
@@ -60,21 +61,30 @@ download 4*u32 example
 	s == idle, out == idle
 02000004	<->	<IDLE>
 	s = downloading, s0 = 4, p1 = 0, out = buf[0], p1 = 1
-<undefined>	<->	buf[0]
+<any>		<->	buf[0]
 	out = buf[1], p1 = 2
-<undefined>	<->	buf[1]
+<any>		<->	buf[1]
 	out = buf[2], p1 = 3
-<undefined>	<->	buf[2]
+<any>		<->	buf[2]
 	out = buf[3], p1 = 4
 	you might argue that we can set state to idle now
-	but then the next input will be treated as a new command
-<undefined>	<->	buf[3]
+	but then the next input will be handled in idle mode
+	thus treated as a new command
+<any>		<->	buf[3]
 	s = idle, out = idle
 <nop>		<-> 	<IDLE>
 
 worker example
 ===
 	s == idle, out == idle
+10020000	<->	<IDLE>
+	p0 = cmd, out = <BUSY>, s = worker
+<nop>		<->	<BUSY>
+...
+// util worker in the main thread set s = IDLE
+<nop>		<->	<BUSY>
+	out = idle
+<nop>		<->	<IDLE>
 
 */
 void irq_serial(void){
