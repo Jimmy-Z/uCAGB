@@ -24,7 +24,7 @@ unsigned char *load_file(const char *filename, tSize *psize, tSize a){
 	size = ftell(f);
 	*psize = align(size, a);
 	data = malloc(*psize);
-	memset(data, 0xff, *psize);
+	memset(data, 0, *psize);
 	fseek(f, 0, SEEK_SET);
 	fread(data, 1, size, f);
 	fclose(f);
@@ -219,8 +219,13 @@ int df_test(tDev d, int mode, unsigned seed){
 
 	df_upload(d, buf);
 
-	df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
-		NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
+	while(1){
+		crc = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
+			NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
+		if(crc == 0x454c4449){
+			break;
+		}
+	}
 
 	df_download(d, buf);
 
@@ -231,53 +236,87 @@ int df_test(tDev d, int mode, unsigned seed){
 	return 0;
 }
 
-void df_flash(tDev d, const char *filename){
+int df_flash(tDev d, const char *filename, u32 start){
 	char *rom;
 	u32 r, size, i, total, crc0, crc1;
+
+	set_wait(d, 1, 0);
 
 	r = df_worker(d, DF_CMD_ID,
 		NULL, "waiting for Flash ID", "Flash ID returned");
 	if (r != 0x00890018){
 		fprintf(stderr, "sorry, unsupported flash\n");
-		return;
+		return -1;
 	}
 
 	rom = load_file(filename, &size, AGB_BUF_SIZE);
 	if(rom == NULL){
 		fprintf(stderr, "failed to load %s\n", filename);
-		return;
+		return -1;
 	}
 	// fprintf(stderr, "rom loaded @%08x\n", (u32)rom);
 
 	r = df_worker(d, DF_CMD_UNLOCK,
-		NULL, "waiting for clearing Block-Lock Bits", "cleared");
+		NULL, "waiting for clearing Block-Lock Bits", "done");
+	if(r != 0x80){
+		return -1;
+	}
 
 	total = size / AGB_BUF_SIZE;
 	fprintf(stderr, "needs %d upload/erase/program cycles\n", total);
 
-	for(i = 0; i < total; ++i){
+	for(i = start - 1; i < total; ++i){
 		fprintf(stderr, " === %d / %d ===\n", i + 1, total);
-		// TODO: upload and erase can be parallel and we can use double buffer for upload and program
 		// coincidentally our AGB_BUF_SIZE == I28F128J3 block size
 		// fprintf(stderr, "processing rom block %d @%08x\n", i, (u32)(rom + i * AGB_BUF_SIZE));
 		crc0 = crc32(crc32_table, 0, rom + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
-		df_upload(d, rom + i * AGB_BUF_SIZE);
 
-		crc1 = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
-			NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
-		if(crc0 == crc1){
-			fprintf(stderr, "crc match, 0x%08x == 0x%08x\n", crc0, crc1);
-		}else{
-			fprintf(stderr, "crc mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+		// some ugly retry
+		while(1){
+			df_upload(d, rom + i * AGB_BUF_SIZE);
+			crc1 = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
+				NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
+			if(crc0 == crc1){
+				fprintf(stderr, "CRC match, 0x%08x == 0x%08x\n", crc0, crc1);
+				break;
+			}else{
+				fprintf(stderr, "CRC mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+			}
+		}
+		while(1){
+			r = df_worker(d, DF_CMD_ERASE | (i * AGB_BUF_SIZE >> 8),
+				NULL, "erasing", "done");
+			if(r != 0x80){
+				continue;
+			}
+			// I've seen r = DF_STATE_IDLE while GBA side is OK, not very hard to reproduce
+			// but still I can't figure out why :(
+			r = df_worker(d, DF_CMD_PROGRAM | (i * AGB_BUF_SIZE >> 8),
+				NULL, "programming", "done");
+			if(r != 0x80){
+				continue;
+			}
 			break;
 		}
-		df_worker(d, DF_CMD_ERASE | (i * AGB_BUF_SIZE >> 8),
-			NULL, "erasing", "done");
-		df_worker(d, DF_CMD_PROGRAM | (i * AGB_BUF_SIZE >> 8),
-			NULL, "programming", "done");
 	}
 
 	//TODO: lock blocks
+	return 0;
+}
+
+int df_dump(tDev d, const char *filename){
+	u8 buf[AGB_BUF_SIZE];
+
+	set_wait(d, 1, 0);
+
+	df_worker(d, DF_CMD_DUMP,
+		NULL, "waiting for dump", "done");
+
+	df_download(d, buf);
+
+	save_file(filename, buf, AGB_BUF_SIZE);
+
+	return 0;
 }
 
 #define PING_PATTERN 0xff00aa55
@@ -319,7 +358,11 @@ int main(int argc, const char *argv[]){
 	if(argc == 4 && !strcmp(argv[2], "multiboot")){
 		return multiboot(d, argv[3]);
 	}else if(argc == 4 && !strcmp(argv[2], "flash")){
-		return df_flash(d, argv[3]);
+		return df_flash(d, argv[3], 1);
+	}else if(argc == 5 && !strcmp(argv[2], "flash")){
+		return df_flash(d, argv[3], atoi(argv[4]));
+	}else if(argc == 4 && !strcmp(argv[2], "dump")){
+		return df_dump(d, argv[3]);
 	}else if(argc == 3 && !strcmp(argv[2], "bootloader")){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){

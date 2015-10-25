@@ -176,7 +176,7 @@ IWRAM_CODE void irq_serial(void){
 
 // based on Intel 28FxxxJ3D datasheet
 
-#define I28F_WB_SIZE	0x20 // 32 words write buffer
+#define I28F_WB_SIZE	0x10 // 32 bytes / 16 words write buffer
 
 // 1st class
 #define I28F_RA		0xff // Read Array
@@ -225,13 +225,14 @@ IWRAM_CODE u32 cart_id(u32 offset){
 	return (m << 16) | d;
 }
 
-IWRAM_CODE void cart_wait_wsms(u32 offset, u16 command){
+IWRAM_CODE u32 cart_wait_wsms(u32 offset, u16 command){
 	while(1){
 		if(command){
 			WRITE16(offset, command);
 		}
-		if(READ16(offset) & I28F_WSMS_READY){
-			break;
+		u32 sr = READ16(offset);
+		if(sr & I28F_WSMS_READY){
+			return sr;
 		}else{
 			// TODO: a shorter wait
 			VBlankIntrWait();
@@ -239,49 +240,74 @@ IWRAM_CODE void cart_wait_wsms(u32 offset, u16 command){
 	}
 }
 
-IWRAM_CODE void cart_unlock(u32 offset){
-	// unlock is chip wise and earse is block wise, so they are separated
+IWRAM_CODE u32 cart_unlock(u32 offset){
+	// unlock is chip wise and erase is block wise, so they are separated
 	offset = CART_BASE + (offset << 8);
 	// TODO: if no block is locked...
 	iprintf("\nunlocking 0x%08x", offset);
 	WRITE16(offset, I28F_BLB);
 	WRITE16(offset, I28F_CONFIRM);
-	cart_wait_wsms(offset, 0);
-	// TODO: check errors
-	WRITE16(offset, I28F_CSR);
+	u32 sr = cart_wait_wsms(offset, 0);
+	if(sr == I28F_WSMS_READY){
+		iprintf("\ndone");
+	}else{
+		iprintf("\nfailed, SR = 0x%02x", sr);
+		WRITE16(offset, I28F_CSR);
+	}
 	WRITE16(offset, I28F_RA);
-	iprintf("\ndone");
+	return sr;
 }
 
-IWRAM_CODE void cart_erase(u32 offset){
+IWRAM_CODE u32 cart_erase(u32 offset){
 	offset = CART_BASE + (offset << 8);
 	iprintf("\nerasing 0x%08x", offset);
 	WRITE16(offset, I28F_BE);
 	WRITE16(offset, I28F_CONFIRM);
-	cart_wait_wsms(offset, 0);
-	// TODO: check errors
-	WRITE16(offset, I28F_CSR);
+	u32 sr = cart_wait_wsms(offset, 0);
+	if(sr == I28F_WSMS_READY){
+		iprintf("\ndone");
+	}else{
+		iprintf("\nfailed, SR = 0x%02x", sr);
+		WRITE16(offset, I28F_CSR);
+	}
 	WRITE16(offset, I28F_RA);
-	iprintf("\ndone");
+	return sr;
 }
 
-IWRAM_CODE void cart_program(u32 offset){
-	u32 o1, o2;
+IWRAM_CODE u32 cart_program(u32 offset){
+	u32 o1, o2, sr;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\nprogramming 0x%08x", offset);
 	// caution these are all 16 bit wise operations
 	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); o1 += I28F_WB_SIZE){
-		cart_wait_wsms(offset + o1, I28F_WB);
-		WRITE16(offset + o1, I28F_WB_SIZE - 1);
+		cart_wait_wsms(offset + (o1 << 1), I28F_WB);
+		WRITE16(offset + (o1 << 1), I28F_WB_SIZE - 1);
 		for(o2 = 0; o2 < I28F_WB_SIZE; ++o2){
-			WRITE16(offset + o1 + (o2 << 1), buf16[o1 + o2]);
+			WRITE16(offset + ((o1 + o2) << 1), buf16[o1 + o2]);
 		}
-		WRITE16(offset + o1, I28F_CONFIRM);
-		cart_wait_wsms(offset + o1, I28F_RSR);
-		// TODO: check errors
+		WRITE16(offset + (o1 << 1), I28F_CONFIRM);
+		sr = cart_wait_wsms(offset + (o1 << 1), I28F_RSR);
+		if(sr != I28F_WSMS_READY){
+			break;
+		}
+	}
+	if(sr == I28F_WSMS_READY){
+		iprintf("\ndone");
+	}else{
+		iprintf("\nfailed, SR = 0x%02x", sr);
 		WRITE16(offset, I28F_CSR);
 	}
 	WRITE16(offset, I28F_RA);
+	return sr;
+}
+
+IWRAM_CODE void cart_dump(u32 offset){
+	u32 o1;
+	offset = CART_BASE + (offset << 8);
+	iprintf("\ndumping 0x%08x", offset);
+	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); ++o1){
+		buf16[o1] = READ16(offset + (o1 << 1));
+	}
 	iprintf("\ndone");
 }
 
@@ -296,13 +322,16 @@ IWRAM_CODE void worker(void){
 			fsm_p0 = cart_id(fsm_p0 & DF_PARAM_MASK);
 			break;
 		case DF_CMD_UNLOCK:
-			cart_unlock(fsm_p0 & DF_PARAM_MASK);
+			fsm_p0 = cart_unlock(fsm_p0 & DF_PARAM_MASK);
 			break;
 		case DF_CMD_ERASE:
-			cart_erase(fsm_p0 & DF_PARAM_MASK);
+			fsm_p0 = cart_erase(fsm_p0 & DF_PARAM_MASK);
 			break;
 		case DF_CMD_PROGRAM:
-			cart_program(fsm_p0 & DF_PARAM_MASK);
+			fsm_p0 = cart_program(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_DUMP:
+			cart_dump(fsm_p0 & DF_PARAM_MASK);
 			break;
 		default:
 			iprintf("\ninvalid worker command");
