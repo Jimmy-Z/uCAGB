@@ -234,8 +234,8 @@ IWRAM_CODE u32 cart_wait_wsms(u32 offset, u16 command){
 		if(sr & I28F_WSMS_READY){
 			return sr;
 		}else{
-			// TODO: a shorter wait
-			VBlankIntrWait();
+			// TODO: a better wait
+			asm("nop");
 		}
 	}
 }
