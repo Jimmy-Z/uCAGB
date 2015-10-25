@@ -187,13 +187,13 @@ inline static void read_data_bulk(void){
 
 inline static void write_data(void){
 	usb_serial_write((uint8_t*)&data, 4);
-	// usb_serial_flush_output();
+	usb_serial_flush_output();
 	c_w += 4;
 }
 
 inline static void write_data_bulk(void){
 	usb_serial_write((uint8_t*)buffer, (BULK_SIZE << 2));
-	// usb_serial_flush_output();
+	usb_serial_flush_output();
 	c_w += (BULK_SIZE << 2);
 }
 

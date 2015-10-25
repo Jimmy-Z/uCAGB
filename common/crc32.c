@@ -22,7 +22,7 @@ void init_crc32_table(u32 *crc32_table){
 }
 
 // http://www.opensource.apple.com/source/xnu/xnu-1456.1.26/bsd/libkern/crc32.c
-u32 crc32(u32 *crc32_table, u32 crc, const u8 *buf, u32 size){
+u32 crc32(u32 *crc32_table, u32 crc, const void *buf, u32 size){
 	const u8 *p;
 	p = buf;
 	crc = ~crc;

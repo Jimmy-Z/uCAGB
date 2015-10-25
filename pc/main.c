@@ -24,7 +24,7 @@ unsigned char *load_file(const char *filename, tSize *psize, tSize a){
 	size = ftell(f);
 	*psize = align(size, a);
 	data = malloc(*psize);
-	memset(data, 0, *psize);
+	memset(data, 0xff, *psize);
 	fseek(f, 0, SEEK_SET);
 	fread(data, 1, size, f);
 	fclose(f);
@@ -56,7 +56,7 @@ int multiboot(tDev d, const char *filename){
 
 	rom = load_file(filename, &size, BULK_SIZE << 2);
 	if(rom == NULL){
-		fprintf(stderr, "can't open %s\n", filename);
+		fprintf(stderr, "failed to load %s\n", filename);
 		return -2;
 	}
 
@@ -156,14 +156,52 @@ int serial_bench(tDev d, int mode, int length){
 	return 0;
 }
 
-void df_wait(tDev d, const char * msg){
+void df_wait(tDev d, const char *msg){
 	u32 r;
 	do{
 		r = xfer32(d, DF_CMD_NOP);
 		sleep(1000/0x10);
-		fprintf(stderr, "\rwaiting for %s, response: 0x%08x", msg, r);
+		fprintf(stderr, "\r%s, response: 0x%08x", msg, r);
 	}while(r != DF_STATE_IDLE);
-	fprintf(stderr, "\n%s ready\n", msg);
+}
+
+void df_upload(tDev d, const void * buf){
+	unsigned t;
+	// df_wait(d, "waiting for DFAGB");
+	fprintf(stderr, "uploading to DFAGB...\n");
+	t = get_rtime();
+	xfer32wo(d, DF_CMD_UPLOAD | (AGB_BUF_SIZE >> 2));
+	xfer32bw(d, buf, AGB_BUF_SIZE);
+	t = get_rtime() - t;
+	fprintf(stderr, "upload to DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
+		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+}
+
+void df_download(tDev d, void *buf){
+	unsigned t;
+	fprintf(stderr, "downloading from DFAGB...\n");
+	t = get_rtime();
+	xfer32wo(d, DF_CMD_DOWNLOAD | (AGB_BUF_SIZE >> 2));
+	xfer32br(d, buf, AGB_BUF_SIZE);
+	t = get_rtime() - t;
+	fprintf(stderr, "download from DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
+		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+}
+
+u32 df_worker(tDev d, u32 cmd, const char *msg0, const char *msg1, const char *msg2){
+	u32 t, r;
+	if(msg0){
+		fprintf(stderr, msg0);
+	}
+	t = get_rtime();
+	xfer32wo(d, cmd);
+	df_wait(d, msg1);
+	xfer32wo(d, DF_CMD_READ);
+	r = xfer32ro(d);
+	t = get_rtime() - t;
+	fprintf(stderr, "\n%s, response: 0x%08x, %.2f seconds\n",
+		msg2, r, t / 1000.0);
+	return r;
 }
 
 int df_test(tDev d, int mode, unsigned seed){
@@ -179,34 +217,67 @@ int df_test(tDev d, int mode, unsigned seed){
 	// save_file("128K.a.bin", buf, AGB_BUF_SIZE);
 	fprintf(stderr, "random buffer CRC32: 0x%08x\n", crc);
 
-	df_wait(d, "DFAGB");
-	fprintf(stderr, "uploading to DFAGB...\n");
-	t = get_rtime();
-	xfer32wo(d, DF_CMD_UPLOAD | (AGB_BUF_SIZE >> 2));
-	xfer32bw(d, buf, AGB_BUF_SIZE);
-	t = get_rtime() - t;
-	fprintf(stderr, "upload to DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
-		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+	df_upload(d, buf);
 
-	xfer32wo(d, DF_CMD_CRC32 | AGB_BUF_SIZE);
-	df_wait(d, "CRC32");
-	xfer32wo(d, DF_CMD_READ);
-	crc = xfer32ro(d);
-	fprintf(stderr, "DFAGB returned CRC32: 0x%08x\n", crc);
+	df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
+		NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
 
-	fprintf(stderr, "downloading from DFAGB...\n");
+	df_download(d, buf);
 
-	t = get_rtime();
-	xfer32wo(d, DF_CMD_DOWNLOAD | (AGB_BUF_SIZE >> 2));
-	xfer32br(d, buf, AGB_BUF_SIZE);
-	t = get_rtime() - t;
-	fprintf(stderr, "download from DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
-		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
 	// save_file("128K.b.bin", buf, AGB_BUF_SIZE);
 	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
 	fprintf(stderr, "buffer CRC32: 0x%08x\n", crc);
 
 	return 0;
+}
+
+void df_flash(tDev d, const char *filename){
+	char *rom;
+	u32 r, size, i, total, crc0, crc1;
+
+	r = df_worker(d, DF_CMD_ID,
+		NULL, "waiting for Flash ID", "Flash ID returned");
+	if (r != 0x00890018){
+		fprintf(stderr, "sorry, unsupported flash\n");
+		return;
+	}
+
+	rom = load_file(filename, &size, AGB_BUF_SIZE);
+	if(rom == NULL){
+		fprintf(stderr, "failed to load %s\n", filename);
+		return;
+	}
+	// fprintf(stderr, "rom loaded @%08x\n", (u32)rom);
+
+	r = df_worker(d, DF_CMD_UNLOCK,
+		NULL, "waiting for clearing Block-Lock Bits", "cleared");
+
+	total = size / AGB_BUF_SIZE;
+	fprintf(stderr, "needs %d upload/erase/program cycles\n", total);
+
+	for(i = 0; i < total; ++i){
+		fprintf(stderr, " === %d / %d ===\n", i + 1, total);
+		// TODO: upload and erase can be parallel and we can use double buffer for upload and program
+		// coincidentally our AGB_BUF_SIZE == I28F128J3 block size
+		// fprintf(stderr, "processing rom block %d @%08x\n", i, (u32)(rom + i * AGB_BUF_SIZE));
+		crc0 = crc32(crc32_table, 0, rom + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
+		df_upload(d, rom + i * AGB_BUF_SIZE);
+
+		crc1 = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
+			NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
+		if(crc0 == crc1){
+			fprintf(stderr, "crc match, 0x%08x == 0x%08x\n", crc0, crc1);
+		}else{
+			fprintf(stderr, "crc mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+			break;
+		}
+		df_worker(d, DF_CMD_ERASE | (i * AGB_BUF_SIZE >> 8),
+			NULL, "erasing", "done");
+		df_worker(d, DF_CMD_PROGRAM | (i * AGB_BUF_SIZE >> 8),
+			NULL, "programming", "done");
+	}
+
+	//TODO: lock blocks
 }
 
 #define PING_PATTERN 0xff00aa55
@@ -237,7 +308,7 @@ int main(int argc, const char *argv[]){
 	}
 	fprintf(stderr, "open %s success\n", argv[1]);
 
-	// setup_serial(d);
+	setup_serial(d);
 
 	if(validate_uC(d)){
 		fprintf(stderr, "ping %s failed\n", argv[1]);
@@ -247,11 +318,13 @@ int main(int argc, const char *argv[]){
 
 	if(argc == 4 && !strcmp(argv[2], "multiboot")){
 		return multiboot(d, argv[3]);
+	}else if(argc == 4 && !strcmp(argv[2], "flash")){
+		return df_flash(d, argv[3]);
 	}else if(argc == 3 && !strcmp(argv[2], "bootloader")){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){
 		return serial_bench(d, atoi(argv[3]), atoi(argv[4]));
-	}else if(argc == 5 && !strcmp(argv[2], "df")){
+	}else if(argc == 5 && !strcmp(argv[2], "testdf")){
 		return df_test(d, atoi(argv[3]), strtoul(argv[4], NULL, 0x10));
 	}else{
 		fprintf(stderr, "invalid parameters, example:\n\t%s COM1 multiboot your_file.gba\n", argv[0]);

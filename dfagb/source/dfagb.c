@@ -18,9 +18,9 @@ void irq_keypad(void){
 }
 
 // 128K bytes buffer
-EWRAM_BSS u8 buf[AGB_BUF_SIZE];
-#define buf16 ((u16*)buf)
-#define buf32 ((u32*)buf)
+EWRAM_BSS vu8 buf[AGB_BUF_SIZE];
+#define buf16 ((vu16*)buf)
+#define buf32 ((vu32*)buf)
 u32 crc32_table[CRC32_TABLE_LEN];
 
 // FSM stat and parameters
@@ -31,7 +31,7 @@ u32 crc32_table[CRC32_TABLE_LEN];
 #define FSM_WORKER	0x10
 // if I don't declare this as volatile, worker never wakes up
 // some ridiculous compiler stunts?
-volatile u32 fsm_state, fsm_p0, fsm_p1, fsm_p3, fsm_p4;
+vu32 fsm_state, fsm_p0, fsm_p1, fsm_p3, fsm_p4;
 
 void start_serial(u32 out32){
 	REG_SIODATA32 = out32;
@@ -87,16 +87,16 @@ worker example
 <nop>		<->	<IDLE>
 
 */
-void irq_serial(void){
+IWRAM_CODE void irq_serial(void){
 	u32 in32 = REG_SIODATA32, out32 = DF_STATE_IDLE;
 	switch(fsm_state){
 		case FSM_IDLE:
-			switch(in32 & 0xff000000){
+			switch(in32 & DF_CMD_MASK){
 				case DF_CMD_UPLOAD:
 					// upload to buf
 					fsm_state = FSM_UPLOADING;
 					// length, of u32
-					fsm_p0 = in32 & 0x00ffffff;
+					fsm_p0 = in32 & DF_PARAM_MASK;
 					// TODO: we should complain about size exceeds buffer length
 					iprintf("\nuploading %d bytes", fsm_p0 << 2);
 					// current offset
@@ -107,7 +107,7 @@ void irq_serial(void){
 					// download to buf
 					fsm_state = FSM_DOWNLOADING;
 					// length, of u32
-					fsm_p0 = in32 & 0x00ffffff;
+					fsm_p0 = in32 & DF_PARAM_MASK;
 					// TODO: we should complain about size exceeds buffer length
 					iprintf("\ndownloading %d bytes", fsm_p0 << 2);
 					// current offset
@@ -121,23 +121,28 @@ void irq_serial(void){
 					fsm_state = FSM_READING;
 					break;
 				case DF_CMD_CRC32:
-				case DF_CMD_FLASH:
-				case DF_CMD_DUMP:
 				case DF_CMD_READ_SRAM:
 				case DF_CMD_WRITE_SRAM:
 				case DF_CMD_READ_FLASH:
 				case DF_CMD_WRITE_FLASH:
 				case DF_CMD_READ_EEPROM:
 				case DF_CMD_WRITE_EEPROM:
+				case DF_CMD_DUMP:
+				case DF_CMD_ID:
+				case DF_CMD_UNLOCK:
+				case DF_CMD_ERASE:
+				case DF_CMD_PROGRAM:
 					fsm_p0 = in32;
 					out32 = DF_STATE_BUSY;
 					fsm_state = FSM_WORKER;
 					// iprintf("\nworker command: 0x%08x", in32);
 					break;
-				// case DF_CMD_NOP & 0xff000000:
 				default:
-					if(in32 != DF_CMD_NOP){
-						iprintf("\ninvalid command");
+					if(in32 == DF_CMD_NOP){
+					}else if(in32 == MULTIBOOT_PING){
+						SystemCall(0x26);
+					}else{
+						iprintf("\ninvalid command 0x%08x", in32);
 					}
 					break;
 			}
@@ -167,12 +172,137 @@ void irq_serial(void){
 	start_serial(out32);
 }
 
-void worker(void){
-	switch(fsm_p0 & 0xff000000){
+#define CART_BASE 0x08000000 // ends @ 0x09ffffff
+
+// based on Intel 28FxxxJ3D datasheet
+
+#define I28F_WB_SIZE	0x20 // 32 words write buffer
+
+// 1st class
+#define I28F_RA		0xff // Read Array
+#define I28F_RIC	0x90 // Read Identifier Codes
+#define I28F_RSR	0x70 // Read Status Register
+#define I28F_CSR	0x50 // Clear Status Register
+#define I28F_WB		0xE8 // Write to Buffer
+#define I28F_BE		0x20 // Block Erase
+#define I28F_BLB	0x60 // Set/Clear Block Lock-Bits
+// 2nd class
+#define I28F_CONFIRM	0xD0 // confirm
+
+#define I28F_WSMS_READY	0x80 // Write State Machine Status, SR7, 1 = Ready
+
+// the volatile declaration is mandatory for FLASH operation
+#define WRITE8(_ADDR, _V)	*(vu8*)(_ADDR) = (_V)
+#define READ8(_ADDR)		(*(vu8*)(_ADDR))
+#define WRITE16(_ADDR, _V)	*(vu16*)(_ADDR) = (_V)
+#define READ16(_ADDR)		(*(vu16*)(_ADDR))
+#define READ16(_ADDR)		(*(vu16*)(_ADDR))
+#define WRITE32(_ADDR, _V)	*(vu32*)(_ADDR) = (_V)
+#define READ32(_ADDR)		(*(vu32*)(_ADDR))
+
+IWRAM_CODE u32 cart_id(u32 offset){
+	// since we have only 24 bit parameter space
+	// and the offset should be able to cover the entire ROM length 0x02000000
+	// the offset is shifted 8 bits
+	offset = CART_BASE + (offset << 8);
+	WRITE16(offset, I28F_RIC);
+	u8 m = READ16(offset), d = READ16(offset + 2);
+	iprintf("\nManufacture/Device: %02x, %02x", m, d);
+	if(m == 0x89){
+		u16 s;
+		if(d == 0x1d){
+			s = 256;
+		}else{
+			s = 1 << (d - 0x11);
+		}
+		iprintf("\nIntel %dM", s);
+	}else if(m == 0x2e){
+		iprintf("\nnot a Flash cart");
+	}else{
+		iprintf("\nFlash type not supported");
+	}
+	WRITE16(offset, I28F_RA);
+	return (m << 16) | d;
+}
+
+IWRAM_CODE void cart_wait_wsms(u32 offset, u16 command){
+	while(1){
+		if(command){
+			WRITE16(offset, command);
+		}
+		if(READ16(offset) & I28F_WSMS_READY){
+			break;
+		}else{
+			// TODO: a shorter wait
+			VBlankIntrWait();
+		}
+	}
+}
+
+IWRAM_CODE void cart_unlock(u32 offset){
+	// unlock is chip wise and earse is block wise, so they are separated
+	offset = CART_BASE + (offset << 8);
+	// TODO: if no block is locked...
+	iprintf("\nunlocking 0x%08x", offset);
+	WRITE16(offset, I28F_BLB);
+	WRITE16(offset, I28F_CONFIRM);
+	cart_wait_wsms(offset, 0);
+	// TODO: check errors
+	WRITE16(offset, I28F_CSR);
+	WRITE16(offset, I28F_RA);
+	iprintf("\ndone");
+}
+
+IWRAM_CODE void cart_erase(u32 offset){
+	offset = CART_BASE + (offset << 8);
+	iprintf("\nerasing 0x%08x", offset);
+	WRITE16(offset, I28F_BE);
+	WRITE16(offset, I28F_CONFIRM);
+	cart_wait_wsms(offset, 0);
+	// TODO: check errors
+	WRITE16(offset, I28F_CSR);
+	WRITE16(offset, I28F_RA);
+	iprintf("\ndone");
+}
+
+IWRAM_CODE void cart_program(u32 offset){
+	u32 o1, o2;
+	offset = CART_BASE + (offset << 8);
+	iprintf("\nprogramming 0x%08x", offset);
+	// caution these are all 16 bit wise operations
+	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); o1 += I28F_WB_SIZE){
+		cart_wait_wsms(offset + o1, I28F_WB);
+		WRITE16(offset + o1, I28F_WB_SIZE - 1);
+		for(o2 = 0; o2 < I28F_WB_SIZE; ++o2){
+			WRITE16(offset + o1 + (o2 << 1), buf16[o1 + o2]);
+		}
+		WRITE16(offset + o1, I28F_CONFIRM);
+		cart_wait_wsms(offset + o1, I28F_RSR);
+		// TODO: check errors
+		WRITE16(offset, I28F_CSR);
+	}
+	WRITE16(offset, I28F_RA);
+	iprintf("\ndone");
+}
+
+IWRAM_CODE void worker(void){
+	switch(fsm_p0 & DF_CMD_MASK){
 		case DF_CMD_CRC32:
-			iprintf("\nCRC32(0x%06x):", fsm_p0 & 0x00ffffff);
-			fsm_p0 = crc32(crc32_table, 0, buf, fsm_p0 & 0x00ffffff);
+			iprintf("\nCRC32(0x%06x):", fsm_p0 & DF_PARAM_MASK);
+			fsm_p0 = crc32(crc32_table, 0, (const void *)buf, fsm_p0 & DF_PARAM_MASK);
 			iprintf(" 0x%08x", fsm_p0);
+			break;
+		case DF_CMD_ID:
+			fsm_p0 = cart_id(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_UNLOCK:
+			cart_unlock(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_ERASE:
+			cart_erase(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_PROGRAM:
+			cart_program(fsm_p0 & DF_PARAM_MASK);
 			break;
 		default:
 			iprintf("\ninvalid worker command");

@@ -21,7 +21,9 @@
 // commands sent to DFAGB from PC
 // actually DFAGB FSM only check the 1st byte for a command
 // the lower 24 bits can be used as parameter(s)
-#define DF_CMD_NOP		0x00504f4e
+#define DF_CMD_MASK		0xff000000
+#define DF_PARAM_MASK		0x00ffffff
+#define DF_CMD_NOP		0x00504f4e // "NOP"
 // upload and download (to/from the 128KB buffer) are processed by the FSM directly
 // the lower 24 bits are transfer length(of u32)
 #define DF_CMD_UPLOAD		(1 << 24)
@@ -30,15 +32,23 @@
 #define DF_CMD_READ		(3 << 24)
 // these are WORKER commands, FSM will block(return busy) until worker finishes them in main thread
 #define DF_CMD_CRC32		(0x10 << 24) // length (of u8)
-#define DF_CMD_FLASH		(0x11 << 24)
-#define DF_CMD_DUMP		(0x12 << 24)
-#define DF_CMD_READ_SRAM	(0x13 << 24)
-#define DF_CMD_WRITE_SRAM	(0x14 << 24)
-#define DF_CMD_READ_FLASH	(0x15 << 24)
-#define DF_CMD_WRITE_FLASH	(0x16 << 24)
-#define DF_CMD_READ_EEPROM	(0x17 << 24)
-#define DF_CMD_WRITE_EEPROM	(0x18 << 24)
+// save
+#define DF_CMD_READ_SRAM	(0x20 << 24)
+#define DF_CMD_WRITE_SRAM	(0x21 << 24)
+#define DF_CMD_READ_FLASH	(0x22 << 24)
+#define DF_CMD_WRITE_FLASH	(0x23 << 24)
+#define DF_CMD_READ_EEPROM	(0x24 << 24)
+#define DF_CMD_WRITE_EEPROM	(0x25 << 24)
+// ROM
+#define DF_CMD_DUMP		(0x30 << 24)
+// Flash carts ROM/Flash operations
+#define DF_CMD_ID		(0x40 << 24)
+#define DF_CMD_UNLOCK		(0x41 << 24)
+#define DF_CMD_ERASE		(0x42 << 24)
+#define DF_CMD_PROGRAM		(0x43 << 24)
+
+#define MULTIBOOT_PING		0x00006202
 
 // this is the 4CC status code PC will read from DFAGB via SIO
-#define DF_STATE_IDLE	0x454c4449
-#define DF_STATE_BUSY	0x59535542
+#define DF_STATE_IDLE	0x454c4449 // "IDLE"
+#define DF_STATE_BUSY	0x59535542 // "BUSY"
