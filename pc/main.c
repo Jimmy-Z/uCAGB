@@ -18,6 +18,7 @@ unsigned char *load_file(const char *filename, tSize *psize, tSize a){
 	unsigned char *data;
 	f = fopen(filename, "rb");
 	if(!f){
+		fprintf(stderr, "failed to open \"%s\" for read\n", filename);
 		return NULL;
 	}
 	fseek(f, 0, SEEK_END);
@@ -165,27 +166,27 @@ void df_wait(tDev d, const char *msg){
 	}while(r != DF_STATE_IDLE);
 }
 
-void df_upload(tDev d, const void * buf){
+void df_upload(tDev d, const void * buf, u32 size){
 	unsigned t;
 	// df_wait(d, "waiting for DFAGB");
-	fprintf(stderr, "uploading to DFAGB...\n");
+	fprintf(stderr, "uploading %d bytes to DFAGB...\n", size);
 	t = get_rtime();
-	xfer32wo(d, DF_CMD_UPLOAD | (AGB_BUF_SIZE >> 2));
-	xfer32bw(d, buf, AGB_BUF_SIZE);
+	xfer32wo(d, DF_CMD_UPLOAD | (size >> 2));
+	xfer32bw(d, buf, size);
 	t = get_rtime() - t;
 	fprintf(stderr, "upload to DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
-		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+		t / 1000.0, size * 8.0 / t, size * 1.0 / t);
 }
 
-void df_download(tDev d, void *buf){
+void df_download(tDev d, void *buf, u32 size){
 	unsigned t;
-	fprintf(stderr, "downloading from DFAGB...\n");
+	fprintf(stderr, "downloading %d bytes from DFAGB...\n", size);
 	t = get_rtime();
-	xfer32wo(d, DF_CMD_DOWNLOAD | (AGB_BUF_SIZE >> 2));
-	xfer32br(d, buf, AGB_BUF_SIZE);
+	xfer32wo(d, DF_CMD_DOWNLOAD | (size >> 2));
+	xfer32br(d, buf, size);
 	t = get_rtime() - t;
 	fprintf(stderr, "download from DFAGB complete, %.2f seconds, average speed %.2f Kbps(%.2f KB/s)\n",
-		t / 1000.0, AGB_BUF_SIZE * 8.0 / t, AGB_BUF_SIZE * 1.0 / t);
+		t / 1000.0, size * 8.0 / t, size * 1.0 / t);
 }
 
 u32 df_worker(tDev d, u32 cmd, const char *msg0, const char *msg1, const char *msg2){
@@ -217,7 +218,7 @@ int df_test(tDev d, int mode, unsigned seed){
 	// save_file("128K.a.bin", buf, AGB_BUF_SIZE);
 	fprintf(stderr, "random buffer CRC32: 0x%08x\n", crc);
 
-	df_upload(d, buf);
+	df_upload(d, buf, AGB_BUF_SIZE);
 
 	while(1){
 		crc = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
@@ -227,7 +228,7 @@ int df_test(tDev d, int mode, unsigned seed){
 		}
 	}
 
-	df_download(d, buf);
+	df_download(d, buf, AGB_BUF_SIZE);
 
 	// save_file("128K.b.bin", buf, AGB_BUF_SIZE);
 	crc = crc32(crc32_table, 0, buf, AGB_BUF_SIZE);
@@ -251,7 +252,6 @@ int df_flash(tDev d, const char *filename, u32 start){
 
 	rom = load_file(filename, &size, AGB_BUF_SIZE);
 	if(rom == NULL){
-		fprintf(stderr, "failed to load %s\n", filename);
 		return -1;
 	}
 	// fprintf(stderr, "rom loaded @%08x\n", (u32)rom);
@@ -265,15 +265,20 @@ int df_flash(tDev d, const char *filename, u32 start){
 	total = size / AGB_BUF_SIZE;
 	fprintf(stderr, "needs %d upload/erase/program cycles\n", total);
 
+	if (start < 1 || start > total){
+		start = 1;
+	}
 	for(i = start - 1; i < total; ++i){
 		fprintf(stderr, " === %d / %d ===\n", i + 1, total);
 		// coincidentally our AGB_BUF_SIZE == I28F128J3 block size
 		// fprintf(stderr, "processing rom block %d @%08x\n", i, (u32)(rom + i * AGB_BUF_SIZE));
 		crc0 = crc32(crc32_table, 0, rom + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
 
+		// TODO: dump and compare to skip identical blocks
+
 		// some ugly retry
 		while(1){
-			df_upload(d, rom + i * AGB_BUF_SIZE);
+			df_upload(d, rom + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
 			crc1 = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
 				NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
 			if(crc0 == crc1){
@@ -312,9 +317,50 @@ int df_dump(tDev d, const char *filename){
 	df_worker(d, DF_CMD_DUMP,
 		NULL, "waiting for dump", "done");
 
-	df_download(d, buf);
+	df_download(d, buf, AGB_BUF_SIZE);
 
 	save_file(filename, buf, AGB_BUF_SIZE);
+
+	return 0;
+}
+
+void parse_save_type(const char *save_type, int is_write, u32 *p_cmd, u32 *p_size){
+	if(strcmp(save_type, "sram256") || strcmp(save_type, "sram32")){
+		*p_cmd = is_write ? DF_CMD_WRITE_SRAM : DF_CMD_READ_SRAM;
+		*p_size = 0x8000;
+	}else if(strcmp(save_type, "sram512") || strcmp(save_type, "sram64")){
+		*p_cmd = is_write ? DF_CMD_WRITE_SRAM : DF_CMD_READ_SRAM;
+		*p_size = 0x10000;
+	}else if(strcmp(save_type, "eeprom64") || strcmp(save_type, "eeprom8")){
+		*p_cmd = is_write ? DF_CMD_WRITE_EEPROM : DF_CMD_READ_EEPROM;
+		*p_size = 0x2000;
+	}else if(strcmp(save_type, "eeprom4") || strcmp(save_type, "eeprom0.5") || strcmp(save_type, "eeprom512")){
+		*p_cmd = is_write ? DF_CMD_WRITE_EEPROM : DF_CMD_READ_EEPROM;
+		*p_size = 0x200;
+	}else{
+		fprintf(stderr, "invalid save type: %s\n", save_type);
+		*p_size = 0;
+	}
+}
+
+// write save file to cart
+int df_write(tDev d, const char *save_type, const char *filename){
+	u32 cmd, size, fsize;
+	u8 *p_save;
+	parse_save_type(save_type, 1, &cmd, &size);
+	if(size == 0){
+		return -1;
+	}
+	p_save = load_file(filename, &fsize, size);
+	if(p_save == NULL){
+		return -1;
+	}
+
+	set_wait(d, 1, 0);
+
+	df_upload(d, p_save, size);
+
+	df_worker(d, cmd | size, NULL, "waiting for write %s", "done");
 
 	return 0;
 }
@@ -363,6 +409,9 @@ int main(int argc, const char *argv[]){
 		return df_flash(d, argv[3], atoi(argv[4]));
 	}else if(argc == 4 && !strcmp(argv[2], "dump")){
 		return df_dump(d, argv[3]);
+	}else if(argc == 5 && !strcmp(argv[2], "write")){
+		// example usbagb com3 write sram256 save.bin
+		return df_write(d, argv[3], argv[4]);
 	}else if(argc == 3 && !strcmp(argv[2], "bootloader")){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){

@@ -151,7 +151,7 @@ IWRAM_CODE void irq_serial(void){
 			buf32[fsm_p1++] = in32;
 			if(fsm_p1 >= fsm_p0){
 				fsm_state = FSM_IDLE;
-				iprintf("\nupload complete");
+				iprintf(", done");
 			}
 			break;
 		case FSM_DOWNLOADING:
@@ -159,7 +159,7 @@ IWRAM_CODE void irq_serial(void){
 				out32 = buf32[fsm_p1++];
 			}else{
 				fsm_state = FSM_IDLE;
-				iprintf("\ndownload complete");
+				iprintf(", done");
 			}
 			break;
 		case FSM_READING:
@@ -200,7 +200,7 @@ IWRAM_CODE void irq_serial(void){
 #define WRITE32(_ADDR, _V)	*(vu32*)(_ADDR) = (_V)
 #define READ32(_ADDR)		(*(vu32*)(_ADDR))
 
-IWRAM_CODE u32 cart_id(u32 offset){
+u32 cart_id(u32 offset){
 	// since we have only 24 bit parameter space
 	// and the offset should be able to cover the entire ROM length 0x02000000
 	// the offset is shifted 8 bits
@@ -225,7 +225,7 @@ IWRAM_CODE u32 cart_id(u32 offset){
 	return (m << 16) | d;
 }
 
-IWRAM_CODE u32 cart_wait_wsms(u32 offset, u16 command){
+u32 cart_wait_wsms(u32 offset, u16 command){
 	while(1){
 		if(command){
 			WRITE16(offset, command);
@@ -240,7 +240,7 @@ IWRAM_CODE u32 cart_wait_wsms(u32 offset, u16 command){
 	}
 }
 
-IWRAM_CODE u32 cart_unlock(u32 offset){
+u32 cart_unlock(u32 offset){
 	// unlock is chip wise and erase is block wise, so they are separated
 	offset = CART_BASE + (offset << 8);
 	// TODO: if no block is locked...
@@ -249,32 +249,32 @@ IWRAM_CODE u32 cart_unlock(u32 offset){
 	WRITE16(offset, I28F_CONFIRM);
 	u32 sr = cart_wait_wsms(offset, 0);
 	if(sr == I28F_WSMS_READY){
-		iprintf("\ndone");
+		iprintf(", done");
 	}else{
-		iprintf("\nfailed, SR = 0x%02x", sr);
+		iprintf("\n! failed, SR = 0x%02x", sr);
 		WRITE16(offset, I28F_CSR);
 	}
 	WRITE16(offset, I28F_RA);
 	return sr;
 }
 
-IWRAM_CODE u32 cart_erase(u32 offset){
+u32 cart_erase(u32 offset){
 	offset = CART_BASE + (offset << 8);
 	iprintf("\nerasing 0x%08x", offset);
 	WRITE16(offset, I28F_BE);
 	WRITE16(offset, I28F_CONFIRM);
 	u32 sr = cart_wait_wsms(offset, 0);
 	if(sr == I28F_WSMS_READY){
-		iprintf("\ndone");
+		iprintf(", done");
 	}else{
-		iprintf("\nfailed, SR = 0x%02x", sr);
+		iprintf("\n! failed, SR = 0x%02x", sr);
 		WRITE16(offset, I28F_CSR);
 	}
 	WRITE16(offset, I28F_RA);
 	return sr;
 }
 
-IWRAM_CODE u32 cart_program(u32 offset){
+u32 cart_program(u32 offset){
 	u32 o1, o2, sr;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\nprogramming 0x%08x", offset);
@@ -292,31 +292,50 @@ IWRAM_CODE u32 cart_program(u32 offset){
 		}
 	}
 	if(sr == I28F_WSMS_READY){
-		iprintf("\ndone");
+		iprintf(", done");
 	}else{
-		iprintf("\nfailed, SR = 0x%02x", sr);
+		iprintf("\n! failed, SR = 0x%02x", sr);
 		WRITE16(offset, I28F_CSR);
 	}
 	WRITE16(offset, I28F_RA);
 	return sr;
 }
 
-IWRAM_CODE void cart_dump(u32 offset){
+void cart_dump(u32 offset){
 	u32 o1;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\ndumping 0x%08x", offset);
 	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); ++o1){
 		buf16[o1] = READ16(offset + (o1 << 1));
 	}
-	iprintf("\ndone");
+	iprintf(", done");
 }
 
-IWRAM_CODE void worker(void){
+void read_sram(u32 length){
+	// SRAM can only be accessed 8 bit wise
+	u32 i;
+	iprintf("\nreading SRAM %dK", length >> 10);
+	for(i = 0; i < length; ++i){
+		buf[i] = READ8(SRAM + i);
+	}
+	iprintf(", done");
+}
+
+void write_sram(u32 length){
+	u32 i;
+	iprintf("\nwriting SRAM %dK", length >> 10);
+	for(i = 0; i < length; ++i){
+		WRITE8(SRAM + i, buf[i]);
+	}
+	iprintf(", done");
+}
+
+void worker(void){
 	switch(fsm_p0 & DF_CMD_MASK){
 		case DF_CMD_CRC32:
-			iprintf("\nCRC32(0x%06x):", fsm_p0 & DF_PARAM_MASK);
+			iprintf("\nCRC32(0x%06x)", fsm_p0 & DF_PARAM_MASK);
 			fsm_p0 = crc32(crc32_table, 0, (const void *)buf, fsm_p0 & DF_PARAM_MASK);
-			iprintf(" 0x%08x", fsm_p0);
+			iprintf(": 0x%08x", fsm_p0);
 			break;
 		case DF_CMD_ID:
 			fsm_p0 = cart_id(fsm_p0 & DF_PARAM_MASK);
@@ -333,8 +352,14 @@ IWRAM_CODE void worker(void){
 		case DF_CMD_DUMP:
 			cart_dump(fsm_p0 & DF_PARAM_MASK);
 			break;
+		case DF_CMD_READ_SRAM:
+			read_sram(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_WRITE_SRAM:
+			write_sram(fsm_p0 & DF_PARAM_MASK);
+			break;
 		default:
-			iprintf("\ninvalid worker command");
+			iprintf("\ninvalid worker command: 0x%08x", fsm_p0);
 	}
 	fsm_state = FSM_IDLE;
 }
