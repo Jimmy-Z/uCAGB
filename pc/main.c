@@ -238,7 +238,7 @@ int df_test(tDev d, int mode, unsigned seed){
 }
 
 int df_flash(tDev d, const char *filename, u32 start){
-	char *rom;
+	u8 *rom;
 	u32 r, size, i, total, crc0, crc1;
 
 	set_wait(d, 1, 0);
@@ -255,6 +255,18 @@ int df_flash(tDev d, const char *filename, u32 start){
 		return -1;
 	}
 	// fprintf(stderr, "rom loaded @%08x\n", (u32)rom);
+	if(rom[0] == 0xfe && rom[1] == 0xff && rom[2] == 0x3d && rom[3] == 0xea){
+		rom[0] = 0x2e;
+		rom[1] = 0x00;
+		rom[2] = 0x00;
+		fprintf(stderr, "rom header jmp fix\n");
+	}
+
+	if(rom[0xbe] != 0 || rom[0xbf] != 0){
+		rom[0xbe] = 0;
+		rom[0xbf] = 0;
+		fprintf(stderr, "rom header reserved fix\n");
+	}
 
 	r = df_worker(d, DF_CMD_UNLOCK,
 		NULL, "waiting for clearing Block-Lock Bits", "done");
@@ -309,17 +321,34 @@ int df_flash(tDev d, const char *filename, u32 start){
 	return 0;
 }
 
-int df_dump(tDev d, const char *filename){
-	u8 buf[AGB_BUF_SIZE];
+int df_dump(tDev d, u32 size, const char *filename){
+	u32 i, total, crc0, crc1;
+	u8 *buf;
+
+	size <<= 17; // input Mbits
+	total = size / AGB_BUF_SIZE;
+	buf = malloc(size);
 
 	set_wait(d, 1, 0);
 
-	df_worker(d, DF_CMD_DUMP,
-		NULL, "waiting for dump", "done");
+	for(i = 0; i < total; ++ i){
+		fprintf(stderr, " === %d / %d ===\n", i + 1, total);
+		df_worker(d, DF_CMD_DUMP | (i * AGB_BUF_SIZE >> 8),
+			NULL, "waiting for dump", "done");
+		crc0 = df_worker(d, DF_CMD_CRC32 | AGB_BUF_SIZE,
+			NULL, "waiting for DFAGB CRC32", "DFAGB CRC32 returned");
 
-	df_download(d, buf, AGB_BUF_SIZE);
+		df_download(d, buf + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
+		crc1 = crc32(crc32_table, 0, buf + i * AGB_BUF_SIZE, AGB_BUF_SIZE);
+		if(crc0 == crc1){
+			fprintf(stderr, "CRC match, 0x%08x == 0x%08x\n", crc0, crc1);
+		}else{
+			fprintf(stderr, "CRC mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+			return -1;
+		}
+	}
 
-	save_file(filename, buf, AGB_BUF_SIZE);
+	save_file(filename, buf, size);
 
 	return 0;
 }
@@ -345,7 +374,7 @@ void parse_save_type(const char *save_type, int is_write, u32 *p_cmd, u32 *p_siz
 
 // write save file to cart
 int df_write(tDev d, const char *save_type, const char *filename){
-	u32 cmd, size, fsize;
+	u32 cmd, size, fsize, crc0, crc1;
 	u8 *p_save;
 	parse_save_type(save_type, 1, &cmd, &size);
 	if(size == 0){
@@ -355,12 +384,50 @@ int df_write(tDev d, const char *save_type, const char *filename){
 	if(p_save == NULL){
 		return -1;
 	}
+	crc0 = crc32(crc32_table, 0, p_save, size);
 
 	set_wait(d, 1, 0);
 
 	df_upload(d, p_save, size);
+	crc1 = df_worker(d, DF_CMD_CRC32 | size,
+		NULL, "waiting for DFAGB CRC32", "done");
 
-	df_worker(d, cmd | size, NULL, "waiting for write %s", "done");
+	if(crc0 == crc1){
+		fprintf(stderr, "CRC match, 0x%08x == 0x%08x\n", crc0, crc1);
+	}else{
+		fprintf(stderr, "CRC mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+		return -1;
+	}
+
+	df_worker(d, cmd | size, NULL, "waiting for write save", "done");
+
+	return 0;
+}
+
+// read save from cart and write to file
+int df_read(tDev d, const char *save_type, const char *filename){
+	u32 cmd, size, crc0, crc1;
+	u8 *p_save;
+	parse_save_type(save_type, 0, &cmd, &size);
+	if(size == 0){
+		return -1;
+	}
+	p_save = malloc(size);
+
+	set_wait(d, 1, 0);
+	df_worker(d, cmd | size,
+		NULL, "waiting for read save", "done");
+	crc0 = df_worker(d, DF_CMD_CRC32 | size,
+		NULL, "waiting for DFAGB CRC32", "done");
+	df_download(d, p_save, size);
+	crc1 = crc32(crc32_table, 0, p_save, size);
+	if(crc0 == crc1){
+		fprintf(stderr, "CRC match, 0x%08x == 0x%08x\n", crc0, crc1);
+	}else{
+		fprintf(stderr, "CRC mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
+		return -1;
+	}
+	save_file(filename, p_save, size);
 
 	return 0;
 }
@@ -407,11 +474,15 @@ int main(int argc, const char *argv[]){
 		return df_flash(d, argv[3], 1);
 	}else if(argc == 5 && !strcmp(argv[2], "flash")){
 		return df_flash(d, argv[3], atoi(argv[4]));
-	}else if(argc == 4 && !strcmp(argv[2], "dump")){
-		return df_dump(d, argv[3]);
+	}else if(argc == 5 && !strcmp(argv[2], "dump")){
+		// example usbagb com3 dump 128 dump.bin
+		return df_dump(d, atoi(argv[3]), argv[4]);
 	}else if(argc == 5 && !strcmp(argv[2], "write")){
 		// example usbagb com3 write sram256 save.bin
 		return df_write(d, argv[3], argv[4]);
+	}else if(argc == 5 && !strcmp(argv[2], "read")){
+		// example usbagb com3 read sram256 save.bin
+		return df_read(d, argv[3], argv[4]);
 	}else if(argc == 3 && !strcmp(argv[2], "bootloader")){
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){

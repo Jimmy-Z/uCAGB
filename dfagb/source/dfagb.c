@@ -98,7 +98,7 @@ IWRAM_CODE void irq_serial(void){
 					// length, of u32
 					fsm_p0 = in32 & DF_PARAM_MASK;
 					// TODO: we should complain about size exceeds buffer length
-					iprintf("\nuploading %d bytes", fsm_p0 << 2);
+					iprintf("\nreceiving %d bytes", fsm_p0 << 2);
 					// current offset
 					fsm_p1 = 0;
 					// during upload, the PC side doesn't care about data they receive
@@ -109,7 +109,7 @@ IWRAM_CODE void irq_serial(void){
 					// length, of u32
 					fsm_p0 = in32 & DF_PARAM_MASK;
 					// TODO: we should complain about size exceeds buffer length
-					iprintf("\ndownloading %d bytes", fsm_p0 << 2);
+					iprintf("\nsending %d bytes", fsm_p0 << 2);
 					// current offset
 					fsm_p1 = 0;
 					// PC is expecting data on the next return
