@@ -255,18 +255,6 @@ int df_flash(tDev d, const char *filename, u32 start){
 		return -1;
 	}
 	// fprintf(stderr, "rom loaded @%08x\n", (u32)rom);
-	if(rom[0] == 0xfe && rom[1] == 0xff && rom[2] == 0x3d && rom[3] == 0xea){
-		rom[0] = 0x2e;
-		rom[1] = 0x00;
-		rom[2] = 0x00;
-		fprintf(stderr, "rom header jmp fix\n");
-	}
-
-	if(rom[0xbe] != 0 || rom[0xbf] != 0){
-		rom[0xbe] = 0;
-		rom[0xbf] = 0;
-		fprintf(stderr, "rom header reserved fix\n");
-	}
 
 	r = df_worker(d, DF_CMD_UNLOCK,
 		NULL, "waiting for clearing Block-Lock Bits", "done");
@@ -300,24 +288,30 @@ int df_flash(tDev d, const char *filename, u32 start){
 				fprintf(stderr, "CRC mismatch, 0x%08x != 0x%08x\n", crc0, crc1);
 			}
 		}
+		if(!df_worker(d, DF_CMD_VERIFY | (i * AGB_BUF_SIZE >> 8),
+			NULL, "verifying", "done")){
+			fprintf(stderr, "identical block, skipped\n");
+			continue;
+		}
 		while(1){
 			r = df_worker(d, DF_CMD_ERASE | (i * AGB_BUF_SIZE >> 8),
 				NULL, "erasing", "done");
 			if(r != 0x80){
 				continue;
 			}
-			// I've seen r = DF_STATE_IDLE while GBA side is OK, not very hard to reproduce
-			// but still I can't figure out why :(
+			// I've seen r = DF_STATE_IDLE instead of 0x80 while GBA side is OK
+			// very hard to reproduce, I can't figure out why :(
 			r = df_worker(d, DF_CMD_PROGRAM | (i * AGB_BUF_SIZE >> 8),
 				NULL, "programming", "done");
 			if(r != 0x80){
 				continue;
 			}
 			break;
+			// TODO: verify the block
 		}
 	}
 
-	//TODO: lock blocks
+	// TODO: lock blocks
 	return 0;
 }
 
@@ -469,21 +463,27 @@ int main(int argc, const char *argv[]){
 	fprintf(stderr, "ping %s success\n", argv[1]);
 
 	if(argc == 4 && !strcmp(argv[2], "multiboot")){
+		// example: usbagb com3 multiboot game.gba
 		return multiboot(d, argv[3]);
 	}else if(argc == 4 && !strcmp(argv[2], "flash")){
+		// example: usbagb com3 flash game.gba
 		return df_flash(d, argv[3], 1);
 	}else if(argc == 5 && !strcmp(argv[2], "flash")){
+		// continue flash starting at specified block
+		// example: usbagb com3 flash game.gba 4
 		return df_flash(d, argv[3], atoi(argv[4]));
 	}else if(argc == 5 && !strcmp(argv[2], "dump")){
-		// example usbagb com3 dump 128 dump.bin
+		// example: usbagb com3 dump 128 dump.gba
 		return df_dump(d, atoi(argv[3]), argv[4]);
 	}else if(argc == 5 && !strcmp(argv[2], "write")){
-		// example usbagb com3 write sram256 save.bin
+		// example: usbagb com3 write sram256 game.sav
 		return df_write(d, argv[3], argv[4]);
 	}else if(argc == 5 && !strcmp(argv[2], "read")){
-		// example usbagb com3 read sram256 save.bin
+		// example: usbagb com3 read sram256 game.sav
 		return df_read(d, argv[3], argv[4]);
 	}else if(argc == 3 && !strcmp(argv[2], "bootloader")){
+		// reset the uCSIO to bootloader
+		// example: usbagb com3 bootloader
 		return reset_to_bootloader(d);
 	}else if(argc == 5 && !strcmp(argv[2], "test")){
 		return serial_bench(d, atoi(argv[3]), atoi(argv[4]));

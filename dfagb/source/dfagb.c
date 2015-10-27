@@ -33,7 +33,7 @@ u32 crc32_table[CRC32_TABLE_LEN];
 // some ridiculous compiler stunts?
 vu32 fsm_state, fsm_p0, fsm_p1, fsm_p3, fsm_p4;
 
-void start_serial(u32 out32){
+IWRAM_CODE void start_serial(u32 out32){
 	REG_SIODATA32 = out32;
 	REG_SIOCNT &= ~(SIO_SO_HIGH);
 	REG_SIOCNT |= SIO_START;
@@ -128,6 +128,7 @@ IWRAM_CODE void irq_serial(void){
 				case DF_CMD_READ_EEPROM:
 				case DF_CMD_WRITE_EEPROM:
 				case DF_CMD_DUMP:
+				case DF_CMD_VERIFY:
 				case DF_CMD_ID:
 				case DF_CMD_UNLOCK:
 				case DF_CMD_ERASE:
@@ -225,7 +226,7 @@ u32 cart_id(u32 offset){
 	return (m << 16) | d;
 }
 
-u32 cart_wait_wsms(u32 offset, u16 command){
+IWRAM_CODE u32 cart_wait_wsms(u32 offset, u16 command){
 	while(1){
 		if(command){
 			WRITE16(offset, command);
@@ -274,19 +275,19 @@ u32 cart_erase(u32 offset){
 	return sr;
 }
 
-u32 cart_program(u32 offset){
+IWRAM_CODE u32 cart_program(u32 offset){
 	u32 o1, o2, sr;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\nprogramming 0x%08x", offset);
-	// caution these are all 16 bit wise operations
-	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); o1 += I28F_WB_SIZE){
-		cart_wait_wsms(offset + (o1 << 1), I28F_WB);
-		WRITE16(offset + (o1 << 1), I28F_WB_SIZE - 1);
-		for(o2 = 0; o2 < I28F_WB_SIZE; ++o2){
-			WRITE16(offset + ((o1 + o2) << 1), buf16[o1 + o2]);
+	// caution these are 16 bit wise operations but o1/o2 are byte offset
+	for(o1 = 0; o1 < AGB_BUF_SIZE; o1 += (I28F_WB_SIZE << 1)){
+		cart_wait_wsms(offset + o1, I28F_WB);
+		WRITE16(offset + o1, I28F_WB_SIZE - 1);
+		for(o2 = 0; o2 < (I28F_WB_SIZE << 1); o2 += 2){
+			WRITE16(offset + o1 + o2, READ16(buf + o1 + o2));
 		}
-		WRITE16(offset + (o1 << 1), I28F_CONFIRM);
-		sr = cart_wait_wsms(offset + (o1 << 1), I28F_RSR);
+		WRITE16(offset + o1, I28F_CONFIRM);
+		sr = cart_wait_wsms(offset + o1, I28F_RSR);
 		if(sr != I28F_WSMS_READY){
 			break;
 		}
@@ -305,10 +306,25 @@ void cart_dump(u32 offset){
 	u32 o1;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\ndumping 0x%08x", offset);
-	for(o1 = 0; o1 < (AGB_BUF_SIZE >> 1); ++o1){
-		buf16[o1] = READ16(offset + (o1 << 1));
+	for(o1 = 0; o1 < AGB_BUF_SIZE; o1 += 2){
+		WRITE16(buf + o1, READ16(offset + o1));
 	}
 	iprintf(", done");
+}
+
+void cart_verify(u32 offset){
+	u32 o1;
+	i32 cmp = 0;
+	offset = CART_BASE + (offset << 8);
+	iprintf("\ncomparing 0x%08x", offset);
+	for(o1 = 0; o1 < AGB_BUF_SIZE; o1 += 2){
+		cmp = READ16(buf + o1) - READ16(offset + o1);
+		if(cmp){
+			break;
+		}
+	}
+	iprintf(", %d", cmp);
+	fsm_p0 = cmp;
 }
 
 void read_sram(u32 length){
@@ -351,6 +367,9 @@ void worker(void){
 			break;
 		case DF_CMD_DUMP:
 			cart_dump(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_VERIFY:
+			cart_verify(fsm_p0 & DF_PARAM_MASK);
 			break;
 		case DF_CMD_READ_SRAM:
 			read_sram(fsm_p0 & DF_PARAM_MASK);
@@ -401,7 +420,7 @@ int main(void) {
 			worker();
 		}
 	}
-
+	return 0;
 }
 
 
