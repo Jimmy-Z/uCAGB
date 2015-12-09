@@ -5,6 +5,7 @@
 #include <gba_systemcalls.h>
 #include <gba_input.h>
 #include <gba_sio.h>
+#include <gba_dma.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -314,7 +315,7 @@ void cart_dump(u32 offset){
 
 void cart_verify(u32 offset){
 	u32 o1;
-	i32 cmp = 0;
+	u16 cmp = 0;
 	offset = CART_BASE + (offset << 8);
 	iprintf("\ncomparing 0x%08x", offset);
 	for(o1 = 0; o1 < AGB_BUF_SIZE; o1 += 2){
@@ -344,6 +345,110 @@ void write_sram(u32 length){
 		WRITE8(SRAM + i, buf[i]);
 	}
 	iprintf(", done");
+}
+
+#define EEPROM ((vu16*)0xDFFFF00)
+#define REG_WAITCNT *(vu32*)(REG_BASE + 0x204)
+
+void inline eeprom_dma_send(u16 *addr, u32 size){
+	REG_DMA3SAD = (u32)addr;
+	REG_DMA3DAD = (u32)EEPROM;
+	REG_DMA3CNT = DMA_ENABLE + size;
+}
+
+void inline eeprom_dma_recv(u16 *addr, u32 size){
+	REG_DMA3SAD = (u32)EEPROM;
+	REG_DMA3DAD = (u32)addr;
+	REG_DMA3CNT = DMA_ENABLE + size;
+}
+
+void read_eeprom(u32 length){
+	u32 i, j, k, aw, len;
+	u16 bits[68], *in_bit;
+	u8 byte;
+	vu8 *out_byte;
+	if(length == 0x200){
+		aw = 6; // address width
+		len = 0x200 / 8; // number of 64 bits / 8 bytes units
+	}else{
+		aw = 14;
+		len = 0x2000 / 8;
+	}
+	REG_WAITCNT = 0x4317; // setup wait state for EEPROM access
+	iprintf("\nreading EEPROM %dK", length >> 10);
+	out_byte = buf;
+	for(i = 0; i < len; ++i){
+		bits[0] = 1; bits[1] = 1; // read request
+		for(j = 0; j < aw; ++j){ // EEPROM address
+			bits[2 + j] = i >> (13 - j);
+		}
+		bits[2 + aw] = 0; // end of request
+		eeprom_dma_send(bits, aw + 3);
+		eeprom_dma_recv(bits, 68);
+		// pack bit stream to bytes
+		in_bit = bits + 4;
+		for(j = 0; j < 8; ++j){
+			byte = 0;
+			byte |= *(in_bit++) & 1;
+			for(k = 1; k < 8; ++k){
+				byte <<= 1;
+				byte |= *(in_bit++) & 1;
+			}
+			*out_byte++ = byte;
+		}
+	}
+	iprintf(", done");
+}
+
+void write_eeprom(u32 length){
+	u32 i, j, k, aw, len;
+	u16 bits[81], *out_bit;
+	u8 byte;
+	vu8 *in_byte;
+	if(length == 0x200){
+		aw = 6; // address width
+		len = 0x200 / 8; // number of 64 bits / 8 bytes units
+	}else{
+		aw = 14;
+		len = 0x2000 / 8;
+	}
+	REG_WAITCNT = 0x4317; // setup wait state for EEPROM access
+	iprintf("\nwriting EEPROM %dK", length >> 10);
+	in_byte = buf;
+	for(i = 0; i < len; ++i){
+		bits[0] = 1; bits[1] = 0; // write request
+		for(j = 0; j < aw; ++j){ // EEPROM address
+			bits[2 + j] = i >> (13 - j);
+		}
+		// unpack bytes to bit stream
+		out_bit = bits + 2 + aw;
+		for(j = 0; j < 8; ++j){
+			byte = *in_byte++;
+			for(k = 7; k < 8; --k){
+				*out_bit++ = byte >> k;
+			}
+		}
+		bits[2 + aw + 64] = 0; // end of request
+		eeprom_dma_send(bits, 2 + aw + 64 + 1);
+		// wait for complete
+		byte = 0;
+		for(j = 0; j < 0x10000; ++j){
+			if(((*EEPROM) & 1) == 1){
+				byte = 1;
+				break;
+			}
+		}
+		if(!byte){
+			iprintf("!");
+		}
+	}
+	iprintf(", done");
+}
+
+void read_flash(u32 length){
+}
+
+void write_flash(u32 length){
 }
 
 void worker(void){
@@ -376,6 +481,18 @@ void worker(void){
 			break;
 		case DF_CMD_WRITE_SRAM:
 			write_sram(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_READ_EEPROM:
+			read_eeprom(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_WRITE_EEPROM:
+			write_eeprom(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_READ_FLASH:
+			read_flash(fsm_p0 & DF_PARAM_MASK);
+			break;
+		case DF_CMD_WRITE_FLASH:
+			write_flash(fsm_p0 & DF_PARAM_MASK);
 			break;
 		default:
 			iprintf("\ninvalid worker command: 0x%08x", fsm_p0);

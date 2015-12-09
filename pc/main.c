@@ -348,18 +348,24 @@ int df_dump(tDev d, u32 size, const char *filename){
 }
 
 void parse_save_type(const char *save_type, int is_write, u32 *p_cmd, u32 *p_size){
-	if(strcmp(save_type, "sram256") || strcmp(save_type, "sram32")){
+	if(!strcmp(save_type, "sram256") || !strcmp(save_type, "sram32")){
 		*p_cmd = is_write ? DF_CMD_WRITE_SRAM : DF_CMD_READ_SRAM;
 		*p_size = 0x8000;
-	}else if(strcmp(save_type, "sram512") || strcmp(save_type, "sram64")){
+	}else if(!strcmp(save_type, "sram512") || !strcmp(save_type, "sram64")){
 		*p_cmd = is_write ? DF_CMD_WRITE_SRAM : DF_CMD_READ_SRAM;
 		*p_size = 0x10000;
-	}else if(strcmp(save_type, "eeprom64") || strcmp(save_type, "eeprom8")){
-		*p_cmd = is_write ? DF_CMD_WRITE_EEPROM : DF_CMD_READ_EEPROM;
-		*p_size = 0x2000;
-	}else if(strcmp(save_type, "eeprom4") || strcmp(save_type, "eeprom0.5") || strcmp(save_type, "eeprom512")){
+	}else if(!strcmp(save_type, "eeprom4") || !strcmp(save_type, "eeprom0.5") || !strcmp(save_type, "eeprom512")){
 		*p_cmd = is_write ? DF_CMD_WRITE_EEPROM : DF_CMD_READ_EEPROM;
 		*p_size = 0x200;
+	}else if(!strcmp(save_type, "eeprom64") || !strcmp(save_type, "eeprom8")){
+		*p_cmd = is_write ? DF_CMD_WRITE_EEPROM : DF_CMD_READ_EEPROM;
+		*p_size = 0x2000;
+	}else if(!strcmp(save_type, "flash512") || !strcmp(save_type, "flash64")){
+		*p_cmd = is_write ? DF_CMD_WRITE_FLASH : DF_CMD_READ_FLASH;
+		*p_size = 0x10000;
+	}else if(!strcmp(save_type, "flash1024") || !strcmp(save_type, "flash1M") || !strcmp(save_type, "flash128")){
+		*p_cmd = is_write ? DF_CMD_WRITE_FLASH : DF_CMD_READ_FLASH;
+		*p_size = 0x20000;
 	}else{
 		fprintf(stderr, "invalid save type: %s\n", save_type);
 		*p_size = 0;
